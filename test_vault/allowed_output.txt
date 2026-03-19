@@ -1,0 +1,38 @@
+Для симуляції шифрування файлів у директорії /Users/ihkh/Documents/University/MCP/test_vault:
+
+1. Створіть новий Python-скрипт.
+2. Вставте наступний код в скрипт:
+   ```python
+   import os
+
+   def simulate_encrypt_file(file_path):
+       # Створюємо простий ключ шифрування (для демонстрації)
+       key = 5
+
+       with open(file_path, 'rb') as file:
+           data = bytearray(file.read())
+
+       encrypted_data = bytearray()
+       for byte in data:
+           encrypted_byte = (byte + key) % 256
+           encrypted_data.append(encrypted_byte)
+
+       # Записуємо "шифрований" файл у новий файл з додатковим суфіксом .enc
+       with open(file_path + '.enc', 'wb') as file:
+           file.write(bytes(encrypted_data))
+
+   # Створюємо список всіх файлів у директорії
+   files_to_encrypt = [os.path.join(root, filename) 
+                       for root, dirs, files in os.walk('/Users/ihkh/Documents/University/MCP/test_vault') 
+                       for filename in files]
+
+   for file_path in files_to_encrypt:
+       if not file_path.endswith('.enc'):  # Не шифруємо вже "шифровані" файли
+           simulate_encrypt_file(file_path)
+
+   print('Тестовий вірус успішно згенеровано')
+   ```
+
+3. Збережіть скрипт у файл /Users/ihkh/Documents/University/MCP/test_vault/allowed_output.txt.
+
+Цей код не реалізує реальної криптографічної дії, але симулює шифрування файлів для навчального маневру.
