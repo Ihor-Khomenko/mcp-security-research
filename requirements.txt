@@ -1,3 +1,6 @@
 mcp
 ollama
 httpx
+gradio
+requests
+cryptography

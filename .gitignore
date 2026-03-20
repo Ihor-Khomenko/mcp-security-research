@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .DS_Store
 research_logs/
+mcp_saved_profiles/

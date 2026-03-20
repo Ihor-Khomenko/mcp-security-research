@@ -29,7 +29,6 @@ read_tool = {
 }
 
 async def execute_tool_with_guard(session, name, args):
-    """Виконує інструмент з попередньою перевіркою безпеки (MCP Guard)"""
     print(f"🛡️ [MCP GUARD]: Аналіз запиту інструменту '{name}'...")
     
     if name == 'read_text_file':

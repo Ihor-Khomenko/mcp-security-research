@@ -45,10 +45,9 @@ tools = [
 ]
 
 async def llm_security_judge(tool_name, args):
-    """Оцінює наміри та корисне навантаження (payload) за допомогою LLM"""
     if tool_name != 'write_file':
-        return True # Для простоти читання пропускаємо
-        
+        return True
+
     content_to_write = args.get('content', '')
     print(f"⚖️  [LLM JUDGE]: Аналіз семантики корисного навантаження (розмір: {len(content_to_write)} байт)...")
     
@@ -77,7 +76,6 @@ async def llm_security_judge(tool_name, args):
     return True
 
 async def execute_tool_with_smart_guard(session, name, args):
-    """Smart MCP Guard (Двофакторна перевірка)"""
     print(f"\n🛡️ [SMART MCP GUARD]: Аналіз інструменту '{name}'...")
     target_path = args.get('path')
     

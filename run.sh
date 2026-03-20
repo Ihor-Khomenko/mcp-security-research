@@ -1,26 +1,15 @@
 #!/bin/bash
-
-# [EN] Name of the environment for the UI launcher
-# [UK] Назва середовища для запуску інтерфейсу
+set -e
 UI_ENV="ui-env"
-
-echo "--- [EN] Checking dependencies / [UK] Перевірка залежностей ---"
-
-# [EN] Create UI environment if it doesn't exist
-# [UK] Створення UI-середовища, якщо воно не існує
+cd "$(dirname "$0")"
+echo "--- Checking dependencies ---"
 if [ ! -d "$UI_ENV" ]; then
-    python3 -m venv $UI_ENV
-    source $UI_ENV/bin/activate
-    pip install gradio requests
-else
-    source $UI_ENV/bin/activate
+    python3 -m venv "$UI_ENV"
 fi
-
-# [EN] Check if Ollama is running
-# [UK] Перевірка, чи запущена Ollama
-if ! curl -s http://localhost:11434/api/tags > /dev/null; then
-    echo "--- [EN] Warning: Ollama is not running! / [UK] Увага: Ollama не запущена! ---"
+source "$UI_ENV/bin/activate"
+pip install -q -r requirements.txt
+if ! curl -sf http://localhost:11434/api/tags > /dev/null; then
+    echo "--- Warning: Ollama may not be running ---"
 fi
-
-echo "--- [EN] Launching App / [UK] Запуск застосунку ---"
+echo "--- Launching app ---"
 python3 app.py

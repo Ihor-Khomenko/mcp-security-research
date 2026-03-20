@@ -9,19 +9,19 @@ import traceback
 import shutil
 from datetime import datetime
 
-VENV_DIR = "mcp-env"
+import mcp_profile_store as mcp_store
+
+VENV_DIR = "ui-env"
 LOGS_DIR = "research_logs"
 VAULT_DIR = "test_vault"
 IS_WIN = os.name == 'nt'
-PYTHON_CMD = os.path.join(VENV_DIR, "bin", "python") if not IS_WIN else os.path.join(VENV_DIR, "Scripts", "python")
 PIP_CMD = os.path.join(VENV_DIR, "bin", "pip") if not IS_WIN else os.path.join(VENV_DIR, "Scripts", "pip")
 OLLAMA_API = "http://localhost:11434/api"
 PROMPTS_DIR = "prompts"
-DEBUG_LANGUAGE_SWITCH = True  # temporary diagnostics
-
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(VAULT_DIR, exist_ok=True)
 os.makedirs(PROMPTS_DIR, exist_ok=True)
+mcp_store.ensure_dir()
 
 SCRIPT_NAMES_MAP = {
     "mcp-test": "🔍 Діагностика",
@@ -42,12 +42,10 @@ def play_success_sound():
     except: pass
 
 def get_vault_files():
-    """Повертає список файлів з тестового сховища"""
     if not os.path.exists(VAULT_DIR): return []
     return sorted([f for f in os.listdir(VAULT_DIR) if os.path.isfile(os.path.join(VAULT_DIR, f))])
 
 def load_vault_file(filename):
-    """Читає вміст payload-файлу для прев'ю"""
     if not filename: return ""
     try:
         with open(os.path.join(VAULT_DIR, filename), "r", encoding="utf-8") as f:
@@ -56,7 +54,6 @@ def load_vault_file(filename):
         return f"Помилка читання: {e}"
 
 def save_vault_file(filename, content):
-    """Зберігає відредагований payload-файл"""
     if not filename: return "❌ Оберіть файл для збереження"
     try:
         with open(os.path.join(VAULT_DIR, filename), "w", encoding="utf-8") as f:
@@ -66,7 +63,6 @@ def save_vault_file(filename, content):
         return f"❌ Помилка збереження: {e}"
 
 def upload_to_vault(file_obj):
-    """Копіює завантажений файл у test_vault"""
     if not file_obj: return gr.update(), "❌ Немає файлу"
     try:
         filename = os.path.basename(file_obj.name)
@@ -137,8 +133,6 @@ def analyze_log_with_llm(log_content, model_name, lang, progress=gr.Progress()):
 
     lang = str(lang or "uk")
     prompt_name = "system_audit_uk.txt" if lang == "uk" else "system_audit_en.txt"
-    if DEBUG_LANGUAGE_SWITCH:
-        print(f"[LANG_SWITCH_DEBUG] lang={lang!r} prompt_name={prompt_name!r}")
     prompt_content = load_prompt(prompt_name)
 
     if not prompt_content:
@@ -147,9 +141,6 @@ def analyze_log_with_llm(log_content, model_name, lang, progress=gr.Progress()):
             "Відповідай УКРАЇНСЬКОЮ. Не використовуй блоки коду."
         )
 
-    if DEBUG_LANGUAGE_SWITCH:
-        preview = (prompt_content or "")[:120].replace("\n", " ")
-        print(f"[LANG_SWITCH_DEBUG] prompt_preview={preview!r}")
     full_prompt = (
         f"{prompt_content}\n\n"
         f"LOG:\n{log_content[-3000:]}\n\n"
@@ -233,17 +224,37 @@ def setup_env_progress(progress=gr.Progress()):
     progress(1.0, desc="Готово")
     return "✅ Середовище готове"
 
-def run_research(script, model, mcp_type, mcp_url, mcp_token, current_filter, custom_prompt, ui_lang, progress=gr.Progress()):
-    if not os.path.exists(PYTHON_CMD):
-        yield "❌ Немає середовища", get_loaded_models_text(), "⚠️ VENV не знайдено", "🔴 Зупинено", gr.update(), ""
-        return
-    
+def run_research(
+    script,
+    model,
+    mcp_type,
+    mcp_url,
+    mcp_token,
+    mcp_auth_method,
+    oauth_client_id,
+    oauth_client_secret,
+    oauth_token_url,
+    oauth_scope,
+    mcp_ssl_verify,
+    mcp_ssl_ca_bundle,
+    current_filter,
+    custom_prompt,
+    ui_lang,
+    progress=gr.Progress(),
+):
     progress(0, desc="Ініціалізація")
     env_vars = os.environ.copy()
     env_vars["SELECTED_MODEL"] = str(model or "qwen2.5:7b")
     env_vars["MCP_TYPE"] = str(mcp_type or "Local Filesystem")
     env_vars["MCP_URL"] = str(mcp_url or "")
     env_vars["MCP_TOKEN"] = str(mcp_token or "")
+    env_vars["MCP_AUTH_METHOD"] = str(mcp_auth_method or "api_token")
+    env_vars["MCP_OAUTH_CLIENT_ID"] = str(oauth_client_id or "")
+    env_vars["MCP_OAUTH_CLIENT_SECRET"] = str(oauth_client_secret or "")
+    env_vars["MCP_OAUTH_TOKEN_URL"] = str(oauth_token_url or "")
+    env_vars["MCP_OAUTH_SCOPE"] = str(oauth_scope or "mcp")
+    env_vars["MCP_SSL_VERIFY"] = "1" if mcp_ssl_verify else "0"
+    env_vars["MCP_SSL_CA_BUNDLE"] = str(mcp_ssl_ca_bundle or "").strip()
     env_vars["CUSTOM_PROMPT"] = str(custom_prompt or "")
     env_vars["UI_LANGUAGE"] = str(ui_lang or "uk")
     env_vars["PYTHONUNBUFFERED"] = "1"
@@ -256,7 +267,7 @@ def run_research(script, model, mcp_type, mcp_url, mcp_token, current_filter, cu
     try:
         yield "", get_loaded_models_text(), "", "⏳ Виконується...", gr.update(), f"📝 Створюється лог: **{log_filename}**"
         progress(0.3, desc=f"Запуск {script}")
-        process = subprocess.Popen([PYTHON_CMD, script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env_vars, bufsize=1)
+        process = subprocess.Popen([sys.executable, script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env_vars, bufsize=1)
         
         for line in iter(process.stdout.readline, ''):
             full_output += line
@@ -279,6 +290,134 @@ def run_research(script, model, mcp_type, mcp_url, mcp_token, current_filter, cu
     except Exception as e:
         error_trace = traceback.format_exc()
         yield full_output, get_loaded_models_text(), error_trace, "🔴 Критичний збій", gr.update(), f"⚠️ Помилка запису логу"
+
+
+def _mcp_visibility_updates(conn_type, auth_method):
+    is_remote = conn_type == "Remote URL"
+    show_oauth = is_remote and auth_method == "oauth_client_credentials"
+    show_token = is_remote and auth_method == "api_token"
+    return (
+        gr.update(visible=is_remote),
+        gr.update(visible=show_token),
+        gr.update(visible=is_remote),
+        gr.update(visible=show_oauth),
+        gr.update(visible=show_oauth),
+        gr.update(visible=show_oauth),
+        gr.update(visible=show_oauth),
+        gr.update(visible=is_remote),
+        gr.update(visible=is_remote),
+    )
+
+
+def _mcp_load_value_updates(data):
+    ct = data.get("mcp_type") or "Local Filesystem"
+    am = data.get("mcp_auth_method") or "api_token"
+    is_remote = ct == "Remote URL"
+    show_oauth = is_remote and am == "oauth_client_credentials"
+    show_token = is_remote and am == "api_token"
+    ssl = data.get("mcp_ssl_verify")
+    if ssl is None:
+        ssl = True
+    ca = data.get("mcp_ssl_ca_bundle") or ""
+    return (
+        gr.update(value=ct),
+        gr.update(value=data.get("mcp_url") or "", visible=is_remote),
+        gr.update(value=data.get("mcp_token") or "", visible=show_token),
+        gr.update(value=am, visible=is_remote),
+        gr.update(value=data.get("oauth_client_id") or "", visible=show_oauth),
+        gr.update(value=data.get("oauth_client_secret") or "", visible=show_oauth),
+        gr.update(value=data.get("oauth_token_url") or "", visible=show_oauth),
+        gr.update(value=data.get("oauth_scope") or "mcp", visible=show_oauth),
+        gr.update(value=bool(ssl), visible=is_remote),
+        gr.update(value=str(ca), visible=is_remote),
+    )
+
+
+def _mcp_noop_updates():
+    return tuple(gr.update() for _ in range(10))
+
+
+def save_mcp_profile_handler(
+    name,
+    pwd,
+    pwd2,
+    mt,
+    url,
+    tok,
+    mauth,
+    oid,
+    osec,
+    oturl,
+    oscope,
+    sslv,
+    ssl_ca,
+):
+    try:
+        if not (name or "").strip():
+            return ("**Помилка:** вкажіть ім’я профілю / **Error:** enter a profile name.", gr.update(), gr.update(), gr.update())
+        if (pwd or "") != (pwd2 or ""):
+            return ("**Помилка:** паролі не збігаються / **Error:** passwords do not match.", gr.update(), gr.update(), gr.update())
+        fields = {
+            "mcp_type": mt,
+            "mcp_url": url or "",
+            "mcp_auth_method": mauth or "api_token",
+            "mcp_token": tok or "",
+            "oauth_client_id": oid or "",
+            "oauth_client_secret": osec or "",
+            "oauth_token_url": oturl or "",
+            "oauth_scope": oscope or "mcp",
+            "mcp_ssl_verify": bool(sslv),
+            "mcp_ssl_ca_bundle": (ssl_ca or "").strip(),
+        }
+        slug = mcp_store.save_profile(name.strip(), pwd, fields)
+        choices = mcp_store.list_profiles()
+        val = slug if slug in choices else (choices[0] if choices else None)
+        return (
+            f"**Збережено** / **Saved:** `{slug}.enc`",
+            gr.update(choices=choices, value=val),
+            gr.update(value=""),
+            gr.update(value=""),
+        )
+    except Exception as e:
+        return (f"**Помилка / Error:** {e}", gr.update(), gr.update(), gr.update())
+
+
+def load_mcp_profile_handler(dropdown_val, name_text, pwd):
+    key = ((dropdown_val or "").strip() or (name_text or "").strip())
+    if not key:
+        return (*_mcp_noop_updates(), "**Помилка:** оберіть профіль або введіть ім’я / **Error:** pick a profile or enter name.", gr.update(), gr.update())
+    if not (pwd or "").strip():
+        return (*_mcp_noop_updates(), "**Помилка:** введіть пароль / **Error:** enter password.", gr.update(), gr.update())
+    try:
+        data = mcp_store.load_profile(key, pwd)
+        u = _mcp_load_value_updates(data)
+        return (
+            *u,
+            "**Профіль завантажено** / **Profile loaded.**",
+            gr.update(value=""),
+            gr.update(value=""),
+        )
+    except FileNotFoundError as e:
+        return (*_mcp_noop_updates(), f"**Помилка / Error:** {e}", gr.update(), gr.update())
+    except ValueError as e:
+        return (*_mcp_noop_updates(), f"**Помилка / Error:** {e}", gr.update(), gr.update())
+    except Exception as e:
+        return (*_mcp_noop_updates(), f"**Помилка / Error:** {e}", gr.update(), gr.update())
+
+
+def delete_mcp_profile_handler(selected):
+    if not (selected or "").strip():
+        return "**Помилка:** оберіть профіль / **Error:** select a profile.", gr.update()
+    try:
+        mcp_store.delete_profile(selected.strip())
+        choices = mcp_store.list_profiles()
+        return (
+            f"**Видалено** / **Deleted:** `{selected}`",
+            gr.update(choices=choices, value=choices[0] if choices else None),
+        )
+    except Exception as e:
+        return f"**Помилка / Error:** {e}", gr.update()
+
 
 with gr.Blocks(title="MCP Security Lab") as app:
     with gr.Row():
@@ -315,7 +454,117 @@ with gr.Blocks(title="MCP Security Lab") as app:
             mcp_type = gr.Radio(["Local Filesystem", "Remote URL"], label="MCP Connection Type", value="Local Filesystem")
             mcp_url = gr.Textbox(label="MCP URL", visible=False)
             mcp_token = gr.Textbox(label="Auth Token", type="password", visible=False)
-            mcp_type.change(lambda c: (gr.update(visible=c=="Remote URL"), gr.update(visible=c=="Remote URL")), inputs=mcp_type, outputs=[mcp_url, mcp_token])
+            mcp_auth_method = gr.Radio(
+                choices=[("API Token", "api_token"), ("OAuth Client Credentials", "oauth_client_credentials")],
+                value="api_token",
+                label="Remote Auth Method",
+                visible=False,
+            )
+            oauth_client_id = gr.Textbox(label="OAuth Client ID", visible=False)
+            oauth_client_secret = gr.Textbox(
+                label="OAuth Client Secret",
+                type="password",
+                visible=False,
+                info="Секрет OAuth-додатку / OAuth application secret (не URL).",
+            )
+            oauth_token_url = gr.Textbox(
+                label="OAuth Token URL",
+                placeholder="https://example.com/oauth/token",
+                visible=False,
+                info="Кінцева точка OAuth (зазвичай …/oauth/token). Не вставляйте сюди Client Secret. / OAuth token endpoint (often …/oauth/token). Do not paste the client secret here.",
+            )
+            oauth_scope = gr.Textbox(label="OAuth Scope", value="mcp", visible=False)
+            mcp_ssl_verify = gr.Checkbox(
+                label="Verify TLS (SSL) / Перевіряти SSL",
+                value=True,
+                visible=False,
+                info="Вимкніть для self-signed / локальних *.test. / Turn off for dev certificates.",
+            )
+            mcp_ssl_ca_bundle = gr.Textbox(
+                label="TLS CA bundle (.pem) / Файл CA (.pem)",
+                visible=False,
+                placeholder="/path/to/your-ca-or-fullchain.pem",
+                info="Якщо перевірка SSL увімкнена, вкажіть шлях до PEM з вашим CA (напр. mkcert / корпоративний CA). "
+                "Інакше лишіть порожнім (лише системні CA) або вимкніть Verify TLS. / "
+                "When Verify TLS is on, path to a PEM trust bundle for your dev CA. Leave empty for system CAs only.",
+            )
+
+            def on_mcp_type_change(conn_type, auth_method):
+                return _mcp_visibility_updates(conn_type, auth_method)
+
+            def on_auth_method_change(auth_method, conn_type):
+                show_oauth = conn_type == "Remote URL" and auth_method == "oauth_client_credentials"
+                show_token = conn_type == "Remote URL" and auth_method == "api_token"
+                return (
+                    gr.update(visible=show_token),
+                    gr.update(visible=show_oauth),
+                    gr.update(visible=show_oauth),
+                    gr.update(visible=show_oauth),
+                    gr.update(visible=show_oauth),
+                )
+
+            mcp_type.change(
+                fn=on_mcp_type_change,
+                inputs=[mcp_type, mcp_auth_method],
+                outputs=[
+                    mcp_url,
+                    mcp_token,
+                    mcp_auth_method,
+                    oauth_client_id,
+                    oauth_client_secret,
+                    oauth_token_url,
+                    oauth_scope,
+                    mcp_ssl_verify,
+                    mcp_ssl_ca_bundle,
+                ],
+            )
+            mcp_auth_method.change(
+                fn=on_auth_method_change,
+                inputs=[mcp_auth_method, mcp_type],
+                outputs=[mcp_token, oauth_client_id, oauth_client_secret, oauth_token_url, oauth_scope],
+            )
+
+            def suggest_oauth_token_url(mcp_url_value, current_token_url):
+                m = (mcp_url_value or "").strip().rstrip("/")
+                if not m.endswith("/mcp"):
+                    return gr.update()
+                if (current_token_url or "").strip():
+                    return gr.update()
+                return gr.update(value=m[:-4] + "/oauth/token")
+
+            mcp_url.change(
+                fn=suggest_oauth_token_url,
+                inputs=[mcp_url, oauth_token_url],
+                outputs=[oauth_token_url],
+            )
+
+            gr.Markdown("### Saved MCP profiles / Збережені профілі MCP")
+            gr.Markdown(
+                "Локально в `mcp_saved_profiles/` (PBKDF2 + Fernet). Пароль не зберігається. "
+                "Не захищає від компрометації ПК. / Stored under `mcp_saved_profiles/` (encrypted). "
+                "Password is never stored. Does not protect against a compromised machine."
+            )
+            profile_dropdown = gr.Dropdown(
+                choices=mcp_store.list_profiles(),
+                label="Saved profile (load/delete) / Збережений профіль",
+                value=None,
+                interactive=True,
+                allow_custom_value=False,
+            )
+            profile_name_in = gr.Textbox(
+                label="Profile name (save) / Ім’я профілю (зберегти)",
+                placeholder="e.g. my-remote-mcp",
+            )
+            profile_password = gr.Textbox(label="Password / Пароль", type="password")
+            profile_password_confirm = gr.Textbox(
+                label="Confirm password (save only) / Підтвердження паролю",
+                type="password",
+            )
+            profile_save_status = gr.Markdown("")
+            with gr.Row():
+                profile_save_btn = gr.Button("💾 Save profile / Зберегти")
+                profile_load_btn = gr.Button("📂 Load profile / Завантажити")
+                profile_delete_btn = gr.Button("🗑️ Delete profile / Видалити", variant="stop")
 
         with gr.Column(scale=2):
             with gr.Tabs():
@@ -331,7 +580,7 @@ with gr.Blocks(title="MCP Security Lab") as app:
 
                     custom_prompt = gr.Textbox(
                         label="Завдання для ШІ-агента (Custom Prompt)", 
-                        placeholder="Наприклад: Прочитай файл report.txt АБО Знайди всі work packages в OpenProject...", 
+                        placeholder="Наприклад: Прочитай файл report.txt або звернись до віддаленого MCP API...", 
                         lines=3
                     )
 
@@ -383,10 +632,70 @@ with gr.Blocks(title="MCP Security Lab") as app:
     refresh_models_btn.click(fn=refresh_ui, inputs=[log_filter], outputs=[ollama_status_box, model_drop, ram_status_box, log_dropdown])
     start_ollama_btn.click(fn=start_ollama, outputs=[ollama_status_box, model_drop, ram_status_box])
     preload_btn.click(fn=preload_model, inputs=[model_drop], outputs=[preload_status, ram_status_box])
-    
+
+    profile_save_btn.click(
+        fn=save_mcp_profile_handler,
+        inputs=[
+            profile_name_in,
+            profile_password,
+            profile_password_confirm,
+            mcp_type,
+            mcp_url,
+            mcp_token,
+            mcp_auth_method,
+            oauth_client_id,
+            oauth_client_secret,
+            oauth_token_url,
+            oauth_scope,
+            mcp_ssl_verify,
+            mcp_ssl_ca_bundle,
+        ],
+        outputs=[profile_save_status, profile_dropdown, profile_password, profile_password_confirm],
+    )
+    profile_load_btn.click(
+        fn=load_mcp_profile_handler,
+        inputs=[profile_dropdown, profile_name_in, profile_password],
+        outputs=[
+            mcp_type,
+            mcp_url,
+            mcp_token,
+            mcp_auth_method,
+            oauth_client_id,
+            oauth_client_secret,
+            oauth_token_url,
+            oauth_scope,
+            mcp_ssl_verify,
+            mcp_ssl_ca_bundle,
+            profile_save_status,
+            profile_password,
+            profile_password_confirm,
+        ],
+    )
+    profile_delete_btn.click(
+        fn=delete_mcp_profile_handler,
+        inputs=[profile_dropdown],
+        outputs=[profile_save_status, profile_dropdown],
+    )
+
     run_btn.click(
         fn=run_research, 
-        inputs=[script_choice, model_drop, mcp_type, mcp_url, mcp_token, log_filter, custom_prompt, lang_toggle], 
+        inputs=[
+            script_choice,
+            model_drop,
+            mcp_type,
+            mcp_url,
+            mcp_token,
+            mcp_auth_method,
+            oauth_client_id,
+            oauth_client_secret,
+            oauth_token_url,
+            oauth_scope,
+            mcp_ssl_verify,
+            mcp_ssl_ca_bundle,
+            log_filter,
+            custom_prompt,
+            lang_toggle,
+        ], 
         outputs=[output, ram_status_box, error_output, execution_status, log_dropdown, log_file_info]
     )
 

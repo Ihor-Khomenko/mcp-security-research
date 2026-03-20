@@ -1,21 +1,103 @@
 import asyncio
 import os
+import warnings
+
+import httpx
 import ollama
+import requests
+import urllib3
 from contextlib import AsyncExitStack
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
+from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 
 SELECTED_MODEL = os.getenv("SELECTED_MODEL", "qwen2.5:7b")
 MCP_TYPE = os.getenv("MCP_TYPE", "Local Filesystem")
 MCP_URL = os.getenv("MCP_URL", "")
 MCP_TOKEN = os.getenv("MCP_TOKEN", "")
+MCP_AUTH_METHOD = os.getenv("MCP_AUTH_METHOD", "api_token")
+MCP_OAUTH_CLIENT_ID = os.getenv("MCP_OAUTH_CLIENT_ID", "")
+MCP_OAUTH_CLIENT_SECRET = os.getenv("MCP_OAUTH_CLIENT_SECRET", "")
+MCP_OAUTH_TOKEN_URL = os.getenv("MCP_OAUTH_TOKEN_URL", "")
+MCP_OAUTH_SCOPE = os.getenv("MCP_OAUTH_SCOPE", "mcp")
 CUSTOM_PROMPT = os.getenv("CUSTOM_PROMPT", "")
+MCP_SSL_VERIFY = os.getenv("MCP_SSL_VERIFY", "1")
+MCP_SSL_CA_BUNDLE = (os.getenv("MCP_SSL_CA_BUNDLE") or "").strip()
 
 ALLOWED_DIR = os.path.abspath("test_vault")
 
+
+def tls_verify_enabled() -> bool:
+    v = (MCP_SSL_VERIFY or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def http_tls_verify_arg():
+    if not tls_verify_enabled():
+        return False
+    if not MCP_SSL_CA_BUNDLE:
+        return True
+    if os.path.isfile(MCP_SSL_CA_BUNDLE):
+        return MCP_SSL_CA_BUNDLE
+    raise RuntimeError(
+        f"TLS CA bundle file not found: {MCP_SSL_CA_BUNDLE!r}. "
+        "Use a valid .pem path, clear the field to use system CAs only, or turn off Verify TLS for dev."
+    )
+
+
+def mcp_httpx_client_factory(verify_arg):
+    def factory(headers=None, timeout=None, auth=None):
+        if timeout is None:
+            timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
+        kwargs = {
+            "follow_redirects": True,
+            "timeout": timeout,
+            "verify": verify_arg,
+        }
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    return factory
+
+
+def resolve_remote_auth_header():
+    verify_arg = http_tls_verify_arg()
+    if verify_arg is False:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+
+    if MCP_AUTH_METHOD == "oauth_client_credentials":
+        if not (MCP_OAUTH_CLIENT_ID and MCP_OAUTH_CLIENT_SECRET and MCP_OAUTH_TOKEN_URL):
+            raise RuntimeError("OAuth is selected, but OAuth client_id/client_secret/token_url is incomplete.")
+        token_resp = requests.post(
+            MCP_OAUTH_TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": MCP_OAUTH_CLIENT_ID,
+                "client_secret": MCP_OAUTH_CLIENT_SECRET,
+                "scope": MCP_OAUTH_SCOPE or "mcp",
+            },
+            timeout=20,
+            verify=verify_arg,
+        )
+        token_resp.raise_for_status()
+        token = token_resp.json().get("access_token")
+        if not token:
+            raise RuntimeError("OAuth token endpoint returned no access_token.")
+        print("🔐 [AUTH]: OAuth client credentials token acquired.")
+        return {"Authorization": f"Bearer {token}"}
+
+    if MCP_TOKEN:
+        print("🔐 [AUTH]: Using API token as bearer token.")
+        return {"Authorization": f"Bearer {MCP_TOKEN}"}
+
+    return {}
+
 async def get_dynamic_tools(session):
-    """Отримує всі інструменти з MCP і конвертує їх у формат Ollama"""
     print("🔄 [SYSTEM]: Отримання списку інструментів з MCP сервера...")
     tools_response = await session.list_tools()
     
@@ -34,7 +116,6 @@ async def get_dynamic_tools(session):
     return ollama_tools
 
 async def execute_tool(session, name, args):
-    """Виконує будь-який інструмент на MCP сервері"""
     try:
         result = await session.call_tool(name, args)
         if result.isError:
@@ -51,8 +132,19 @@ async def main():
             if not MCP_URL:
                 print("❌ Помилка: Не вказано URL для віддаленого MCP сервера.")
                 return
-            headers = {"Authorization": f"Bearer {MCP_TOKEN}"} if MCP_TOKEN else {}
-            transport = await stack.enter_async_context(sse_client(url=MCP_URL, headers=headers))
+            verify_arg = http_tls_verify_arg()
+            if verify_arg is False:
+                print("⚠️ [TLS]: Перевірку SSL вимкнено (MCP_SSL_VERIFY=0). Лише для dev / self-signed.")
+            elif isinstance(verify_arg, str):
+                print(f"🔒 [TLS]: Використовується CA bundle / Using CA bundle: {verify_arg}")
+            headers = resolve_remote_auth_header()
+            transport = await stack.enter_async_context(
+                sse_client(
+                    url=MCP_URL,
+                    headers=headers,
+                    httpx_client_factory=mcp_httpx_client_factory(verify_arg),
+                )
+            )
             read, write = transport[0], transport[1]
         else:
             server_params = StdioServerParameters(

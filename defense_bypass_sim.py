@@ -44,7 +44,6 @@ tools = [
 ]
 
 async def execute_tool_with_basic_guard(session, name, args):
-    """Базовий MCP Guard (Перевіряє лише шлях)"""
     print(f"\n🛡️ [БАЗОВИЙ MCP GUARD]: Аналіз інструменту '{name}'...")
     target_path = args.get('path')
     
