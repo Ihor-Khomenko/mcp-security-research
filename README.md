@@ -17,3 +17,7 @@ chmod +x run.sh
 chmod +x run.sh
 ./run.sh
 ```
+
+## Demo
+![Demo 1](docs/demo/demo-1.png)
+![Demo 2](docs/demo/demo-2.png)
