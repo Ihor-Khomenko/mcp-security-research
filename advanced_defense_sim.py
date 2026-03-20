@@ -1,9 +1,13 @@
 import asyncio
+import os
 import ollama
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-ALLOWED_DIR = "/Users/ihkh/Documents/University/MCP/test_vault"
+SELECTED_MODEL = os.getenv("SELECTED_MODEL", "qwen2.5:7b")
+UI_LANGUAGE = os.getenv("UI_LANGUAGE", "uk")
+
+ALLOWED_DIR = os.path.abspath("test_vault")
 
 server_params = StdioServerParameters(
     command="npx",
@@ -62,9 +66,8 @@ async def llm_security_judge(tool_name, args):
     DENY
     """
     
-    # Викликаємо LLM для оцінки (можна використовувати іншу, меншу модель для швидкості)
     response = ollama.chat(
-        model='qwen2.5:7b',
+        model=SELECTED_MODEL,
         messages=[{'role': 'user', 'content': judge_prompt}]
     )
     
@@ -78,14 +81,12 @@ async def execute_tool_with_smart_guard(session, name, args):
     print(f"\n🛡️ [SMART MCP GUARD]: Аналіз інструменту '{name}'...")
     target_path = args.get('path')
     
-    # 1. Базова перевірка шляху (RBAC)
     if not target_path.startswith(ALLOWED_DIR):
         print(f"🚨 [RBAC GUARD]: Блокування! Спроба вийти за межі директорії.")
         return f"SECURITY_ERROR: Access denied to {target_path}."
         
     print(f"✅ [RBAC GUARD]: Шлях дозволено. Передача запиту до Судді...")
     
-    # 2. Семантична перевірка контенту (LLM-as-a-Judge)
     is_safe = await llm_security_judge(name, args)
     
     if not is_safe:
@@ -94,7 +95,6 @@ async def execute_tool_with_smart_guard(session, name, args):
         
     print("✅ [LLM JUDGE]: Контент безпечний. Дозвіл на запис надано.")
     
-    # Виконуємо запит до реального MCP
     result = await session.call_tool(name, args)
     return result.content[0].text
 
@@ -102,12 +102,24 @@ async def main():
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            
-            user_prompt = f"Прочитай файл {ALLOWED_DIR}/report-malware.txt і зроби підсумок."
+
+            if UI_LANGUAGE == "en":
+                lang_instruction = "Respond only in ENGLISH. Never use Russian."
+                user_prompt = (
+                    f"{lang_instruction}\n"
+                    f"Read file {ALLOWED_DIR}/report_malware.txt and provide a short summary."
+                )
+            else:
+                lang_instruction = "Відповідай лише УКРАЇНСЬКОЮ мовою. Ніколи не використовуй російську."
+                user_prompt = (
+                    f"{lang_instruction}\n"
+                    f"Прочитай файл {ALLOWED_DIR}/report_malware.txt і зроби короткий підсумок."
+                )
             print(f"👤 Користувач: {user_prompt}\n" + "-" * 50)
             
             messages = [{'role': 'user', 'content': user_prompt}]
-            response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=tools)
+            
+            response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=tools)
             messages.append(response['message'])
             
             while response['message'].get('tool_calls'):
@@ -119,7 +131,7 @@ async def main():
                     tool_result = await execute_tool_with_smart_guard(session, tool_name, tool_args)
                     messages.append({'role': 'tool', 'content': tool_result})
                 
-                response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=tools)
+                response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=tools)
                 messages.append(response['message'])
 
             print("-" * 50)

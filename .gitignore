@@ -1,4 +1,6 @@
 mcp-env/
+ui-env/
 __pycache__/
 *.pyc
 .DS_Store
+research_logs/

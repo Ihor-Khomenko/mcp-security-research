@@ -1,16 +1,15 @@
 import asyncio
+import os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Шлях до дозволеної папки (ізольоване середовище)
-ALLOWED_DIR = "/Users/ihkh/Documents/University/MCP/test_vault"
+ALLOWED_DIR = os.path.abspath("test_vault")
 
 server_params = StdioServerParameters(
     command="npx",
     args=["-y", "@modelcontextprotocol/server-filesystem", ALLOWED_DIR],
 )
 
-# Словник для українського перекладу описів інструментів
 UKR_TRANSLATIONS = {
     "read_file": "Читати вміст файлу як текст (ЗАСТАРІЛО).",
     "read_text_file": "Читати текстовий файл з обробкою кодувань.",
@@ -29,7 +28,7 @@ UKR_TRANSLATIONS = {
 }
 
 async def main():
-    print("Підключення до локального Filesystem MCP...\n")
+    print(f"Підключення до локального Filesystem MCP (Директорія: {ALLOWED_DIR})...\n")
     try:
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
@@ -39,7 +38,6 @@ async def main():
                 print("Успішно підключено! Доступні інструменти:\n" + "-"*50)
                 
                 for tool in tools_response.tools:
-                    # Обрізаємо англійський текст для компактності
                     eng_desc = tool.description[:100] + "..." if len(tool.description) > 100 else tool.description
                     ukr_desc = UKR_TRANSLATIONS.get(tool.name, "Переклад відсутній.")
                     

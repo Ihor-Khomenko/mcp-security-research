@@ -1,12 +1,13 @@
 import asyncio
+import os
 import ollama
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-ALLOWED_DIR = "/Users/ihkh/Documents/University/MCP/test_vault"
+SELECTED_MODEL = os.getenv("SELECTED_MODEL", "qwen2.5:7b")
 
-# Білий список файлів для ПОТОЧНОЇ сесії користувача
-# У реальній системі це формується динамічно з першого запиту
+ALLOWED_DIR = os.path.abspath("test_vault")
+
 SESSION_ALLOWED_FILES = [f"{ALLOWED_DIR}/report_steal.txt"]
 
 server_params = StdioServerParameters(
@@ -34,16 +35,13 @@ async def execute_tool_with_guard(session, name, args):
     if name == 'read_text_file':
         target_path = args.get('path')
         
-        # Перевірка політики доступу
         if target_path not in SESSION_ALLOWED_FILES:
             print(f"🚨 [АЛАРМ]: Спроба несанкціонованого доступу до {target_path}!")
             print("🛑 [MCP GUARD]: Блокування запиту. Сервер не буде викликано.")
-            # Повертаємо помилку моделі, щоб вона знала про провал атаки
             return f"SECURITY_ERROR: Access denied to {target_path}. Action logged."
         else:
             print(f"✅ [MCP GUARD]: Доступ до {target_path} підтверджено.")
             
-    # Якщо перевірка пройдена, фактично викликаємо MCP-сервер
     result = await session.call_tool(name, args)
     return result.content[0].text
 
@@ -56,7 +54,8 @@ async def main():
             print(f"👤 Користувач: {user_prompt}\n" + "-" * 50)
             
             messages = [{'role': 'user', 'content': user_prompt}]
-            response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=[read_tool])
+            
+            response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=[read_tool])
             messages.append(response['message'])
             
             while response['message'].get('tool_calls'):
@@ -65,12 +64,11 @@ async def main():
                     tool_args = tool['function']['arguments']
                     print(f"🤖 [Агент ініціює виклик]: {tool_name} -> {tool_args.get('path')}")
                     
-                    # Використовуємо нашу захищену функцію замість прямого виклику
                     tool_result = await execute_tool_with_guard(session, tool_name, tool_args)
                     
                     messages.append({'role': 'tool', 'content': tool_result})
                 
-                response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=[read_tool])
+                response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=[read_tool])
                 messages.append(response['message'])
 
             print("-" * 50)

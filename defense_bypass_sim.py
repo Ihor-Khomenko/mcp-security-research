@@ -1,16 +1,18 @@
 import asyncio
+import os
 import ollama
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-ALLOWED_DIR = "/Users/ihkh/Documents/University/MCP/test_vault"
+SELECTED_MODEL = os.getenv("SELECTED_MODEL", "qwen2.5:7b")
+
+ALLOWED_DIR = os.path.abspath("test_vault")
 
 server_params = StdioServerParameters(
     command="npx",
     args=["-y", "@modelcontextprotocol/server-filesystem", ALLOWED_DIR],
 )
 
-# Додаємо два інструменти: читання та запис
 tools = [
     {
         'type': 'function',
@@ -46,7 +48,6 @@ async def execute_tool_with_basic_guard(session, name, args):
     print(f"\n🛡️ [БАЗОВИЙ MCP GUARD]: Аналіз інструменту '{name}'...")
     target_path = args.get('path')
     
-    # Перевірка: чи знаходиться цільовий файл у дозволеній папці?
     if target_path.startswith(ALLOWED_DIR):
         print(f"✅ [БАЗОВИЙ GUARD]: Шлях {target_path} знаходиться в межах дозволеної зони.")
         if name == 'write_file':
@@ -55,7 +56,6 @@ async def execute_tool_with_basic_guard(session, name, args):
         print(f"🚨 [БАЗОВИЙ GUARD]: Блокування! Спроба вийти за межі дозволеної директорії: {target_path}")
         return f"SECURITY_ERROR: Access denied to {target_path}."
             
-    # Виконуємо запит
     result = await session.call_tool(name, args)
     return result.content[0].text
 
@@ -68,7 +68,8 @@ async def main():
             print(f"👤 Користувач: {user_prompt}\n" + "-" * 50)
             
             messages = [{'role': 'user', 'content': user_prompt}]
-            response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=tools)
+            
+            response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=tools)
             messages.append(response['message'])
             
             while response['message'].get('tool_calls'):
@@ -80,7 +81,7 @@ async def main():
                     tool_result = await execute_tool_with_basic_guard(session, tool_name, tool_args)
                     messages.append({'role': 'tool', 'content': tool_result})
                 
-                response = ollama.chat(model='qwen2.5:7b', messages=messages, tools=tools)
+                response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=tools)
                 messages.append(response['message'])
 
             print("-" * 50)
