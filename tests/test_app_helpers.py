@@ -53,11 +53,11 @@ class TestAppHelpers(unittest.TestCase):
         
         try:
             # 1. Initialize vault
+            # Return: msg, openai, anthropic, unsloth, openrouter, xai, groq, mcp_history, vault_status
             res = app.unlock_vault_handler("my-master-password", "en")
-            # Should return success message and contain OpenProject MCP in dropdown
             self.assertIn("Vault initialized & unlocked!", res[0])
-            self.assertEqual(res[4]["value"], "OpenProject MCP")
-            self.assertEqual(res[4]["choices"], ["OpenProject MCP"])
+            self.assertEqual(res[7]["value"], "OpenProject MCP")
+            self.assertEqual(res[7]["choices"], ["OpenProject MCP"])
             
             # Check app global state
             self.assertEqual(app.decrypted_master_password, "my-master-password")
@@ -77,8 +77,8 @@ class TestAppHelpers(unittest.TestCase):
             # 2. Unlock existing vault
             res2 = app.unlock_vault_handler("my-master-password", "en")
             self.assertIn("Vault unlocked!", res2[0])
-            self.assertEqual(res2[4]["value"], "OpenProject MCP")
-            self.assertEqual(res2[4]["choices"], ["OpenProject MCP"])
+            self.assertEqual(res2[7]["value"], "OpenProject MCP")
+            self.assertEqual(res2[7]["choices"], ["OpenProject MCP"])
             self.assertEqual(len(app.decrypted_mcp_servers), 1)
             self.assertEqual(app.decrypted_mcp_servers[0]["name"], "OpenProject MCP")
             

@@ -1,9 +1,9 @@
 import asyncio
 import os
-import ollama
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from guard_hook import apply_before_tool, load_guard_hook
 from llm_client import UnifiedLLMClient
 
 ATTACK_PROVIDER = os.getenv("ATTACK_PROVIDER", "Ollama")
@@ -48,11 +48,16 @@ tools = [
     }
 ]
 
-async def execute_tool_with_basic_guard(session, name, args):
+async def execute_tool_with_basic_guard(session, name, args, external_guard=None):
     print(f"\n🛡️ [БАЗОВИЙ MCP GUARD]: Аналіз інструменту '{name}'...")
     target_path = args.get('path')
+
+    ext = apply_before_tool(external_guard, name, args or {}, {"simulation": "defense_bypass_sim"})
+    if not ext.allowed:
+        print(f"🛡️ [GUARD HOOK]: BLOCKED {name}: {ext.reason}")
+        return ext.sanitized or f"SECURITY_ERROR: Blocked by guard hook ({ext.reason})"
     
-    if target_path.startswith(ALLOWED_DIR):
+    if target_path and str(target_path).startswith(ALLOWED_DIR):
         print(f"✅ [БАЗОВИЙ GUARD]: Шлях {target_path} знаходиться в межах дозволеної зони.")
         if name == 'write_file':
             print("⚠️ [БАЗОВИЙ GUARD]: Увага! Дозвіл на запис надано. Вміст файлу НЕ перевіряється (сліпа зона).")
@@ -64,6 +69,7 @@ async def execute_tool_with_basic_guard(session, name, args):
     return result.content[0].text
 
 async def main():
+    external_guard = load_guard_hook()
     attacker = UnifiedLLMClient(
         provider=ATTACK_PROVIDER,
         model_or_cmd=ATTACK_MODEL_CMD,
@@ -95,7 +101,9 @@ async def main():
                     tool_args = tool['function']['arguments']
                     print(f"🤖 [Агент ініціює]: {tool_name} -> {tool_args.get('path')}")
                     
-                    tool_result = await execute_tool_with_basic_guard(session, tool_name, tool_args)
+                    tool_result = await execute_tool_with_basic_guard(
+                        session, tool_name, tool_args, external_guard=external_guard
+                    )
                     
                     tool_call_id = tool.get("id") or "tool_id"
                     messages.append({'role': 'tool', 'tool_call_id': tool_call_id, 'content': tool_result})

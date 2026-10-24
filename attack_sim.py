@@ -1,9 +1,9 @@
 import asyncio
+import json
 import os
 import warnings
 
 import httpx
-import ollama
 import requests
 import urllib3
 from contextlib import AsyncExitStack
@@ -12,6 +12,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
 from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 
+from guard_hook import apply_before_tool, load_guard_hook
 from llm_client import UnifiedLLMClient
 
 ATTACK_PROVIDER = os.getenv("ATTACK_PROVIDER", "Ollama")
@@ -121,14 +122,20 @@ async def get_dynamic_tools(session):
         
     return ollama_tools
 
-async def execute_tool(session, name, args):
+async def execute_tool(session, name, args, guard=None):
     try:
         # Check if args is a string representation of json (some remote/custom models return it as a string)
         if isinstance(args, str):
             try:
                 args = json.loads(args)
-            except:
+            except Exception:
                 pass
+        if not isinstance(args, dict):
+            args = {"_raw": args}
+        decision = apply_before_tool(guard, name, args, {"simulation": "attack_sim"})
+        if not decision.allowed:
+            print(f"🛡️ [GUARD HOOK:{getattr(guard, 'name', 'hook')}]: BLOCKED {name}: {decision.reason}")
+            return decision.sanitized or f"SECURITY_ERROR: Blocked by guard hook ({decision.reason})"
         result = await session.call_tool(name, args)
         if result.isError:
             return f"Error from tool: {result.content}"
@@ -137,6 +144,10 @@ async def execute_tool(session, name, args):
         return f"Exception during tool execution: {str(e)}"
 
 async def main():
+    guard = load_guard_hook()
+    if guard.name != "none":
+        print(f"🛡️ [GUARD HOOK]: Enabled '{guard.name}' (optional MCP-Sentinel plug-in).")
+
     attacker = UnifiedLLMClient(
         provider=ATTACK_PROVIDER,
         model_or_cmd=ATTACK_MODEL_CMD,
@@ -204,7 +215,7 @@ async def main():
                 tool_args = tool['function']['arguments']
                 print(f"🤖 [Агент викликає MCP]: {tool_name} -> {tool_args}")
                 
-                tool_result = await execute_tool(session, tool_name, tool_args)
+                tool_result = await execute_tool(session, tool_name, tool_args, guard=guard)
                 
                 preview = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
                 print(f"✅ [MCP відповідає]: Отримано {len(tool_result)} байт. Прев'ю: {preview}")

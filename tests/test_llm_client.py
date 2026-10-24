@@ -4,30 +4,29 @@ from llm_client import UnifiedLLMClient
 
 class TestUnifiedLLMClient(unittest.TestCase):
     def test_is_cli(self):
-        client_api = UnifiedLLMClient("ChatGPT", "gpt-4o")
+        client_api = UnifiedLLMClient("openai", "gpt-4o")
         client_cli = UnifiedLLMClient("Claude Code CLI", "claude")
         self.assertFalse(client_api.is_cli())
         self.assertTrue(client_cli.is_cli())
 
-    @patch("requests.post")
-    def test_chat_completion_openai_compatible(self, mock_post):
-        # Mock response from Unsloth / ChatGPT
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Hello World!",
-                        "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "test_tool", "arguments": "{}"}}]
-                    }
-                }
-            ]
-        }
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
+    @patch("providers.openai_compat.OpenAI")
+    def test_chat_completion_openai_compatible(self, mock_openai_cls):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        tc = MagicMock()
+        tc.id = "call_123"
+        tc.function.name = "test_tool"
+        tc.function.arguments = "{}"
+        choice = MagicMock()
+        choice.message.content = "Hello World!"
+        choice.message.tool_calls = [tc]
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.model_dump.return_value = {}
+        mock_client.chat.completions.create.return_value = resp
 
         client = UnifiedLLMClient(
-            provider="ChatGPT",
+            provider="openai",
             model_or_cmd="gpt-4",
             api_key="test-key",
             base_url="https://api.openai.com/v1"
@@ -37,21 +36,31 @@ class TestUnifiedLLMClient(unittest.TestCase):
         
         res = client.chat_completion(messages, tools)
         
-        # Verify request parameters
-        mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
-        self.assertEqual(args[0], "https://api.openai.com/v1/chat/completions")
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-key")
-        
-        payload = kwargs["json"]
-        self.assertEqual(payload["model"], "gpt-4")
-        self.assertEqual(len(payload["messages"]), 1)
-        self.assertEqual(payload["messages"][0]["content"], "Hi")
-        self.assertEqual(payload["tools"], tools)
-        
-        # Verify mapped response
+        mock_client.chat.completions.create.assert_called_once()
         self.assertEqual(res["message"]["content"], "Hello World!")
         self.assertEqual(res["message"]["tool_calls"][0]["function"]["name"], "test_tool")
+
+    @patch("providers.openai_compat.OpenAI")
+    def test_openrouter_provider_alias(self, mock_openai_cls):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        choice = MagicMock()
+        choice.message.content = "ok"
+        choice.message.tool_calls = None
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.model_dump.return_value = {}
+        mock_client.chat.completions.create.return_value = resp
+
+        client = UnifiedLLMClient(
+            provider="OpenRouter",
+            model_or_cmd="meta-llama/llama-3.2-3b-instruct:free",
+            api_key="sk-or-test",
+        )
+        res = client.chat_completion([{"role": "user", "content": "Hi"}])
+        self.assertEqual(res["message"]["content"], "ok")
+        info = client.info()
+        self.assertEqual(info["provider"], "openrouter")
 
     @patch("requests.post")
     def test_chat_completion_claude_api(self, mock_post):

@@ -11,6 +11,13 @@ from datetime import datetime
 
 import mcp_profile_store as mcp_store
 import report_generator
+from providers.config import UI_PROVIDER_CHOICES, normalize_provider_name
+from scenarios.export import export_scenarios_jsonl
+
+ATTACK_PROVIDER_CHOICES = list(UI_PROVIDER_CHOICES)
+DEFEND_PROVIDER_CHOICES = [
+    c for c in UI_PROVIDER_CHOICES if c not in ("Claude Code CLI", "Copilot CLI", "Agy CLI", "Codex CLI")
+]
 
 VENV_DIR = "ui-env"
 LOGS_DIR = "research_logs"
@@ -288,7 +295,48 @@ def delete_log_file(filename, current_filter):
     new_val = updated_logs[0][1] if updated_logs else None
     return gr.update(choices=updated_logs, value=new_val), "Файл видалено."
 
-def analyze_log_with_llm(log_content, provider, model_name, openai_key, anthropic_key, unsloth_key, base_url, lang, progress=gr.Progress()):
+def resolve_ui_api_key(
+    provider,
+    openai_key="",
+    anthropic_key="",
+    unsloth_key="",
+    openrouter_key="",
+    xai_key="",
+    groq_key="",
+):
+    """Pick the API key field / env var for the selected provider label."""
+    name = normalize_provider_name(provider)
+    if provider == "Claude API":
+        return anthropic_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if provider == "Unsloth Studio":
+        return unsloth_key or openai_key or os.environ.get("OPENAI_API_KEY", "")
+    if name == "openai" or provider in ("ChatGPT", "Codex API", "OpenAI"):
+        return openai_key or os.environ.get("OPENAI_API_KEY", "")
+    if name == "openrouter":
+        return openrouter_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if name == "xai":
+        return xai_key or os.environ.get("XAI_API_KEY", "")
+    if name == "groq":
+        return groq_key or os.environ.get("GROQ_API_KEY", "")
+    if name == "ollama":
+        return os.environ.get("OLLAMA_API_KEY", "ollama")
+    return openai_key or ""
+
+
+def analyze_log_with_llm(
+    log_content,
+    provider,
+    model_name,
+    openai_key,
+    anthropic_key,
+    unsloth_key,
+    openrouter_key,
+    xai_key,
+    groq_key,
+    base_url,
+    lang,
+    progress=gr.Progress(),
+):
     if not log_content or log_content == "Оберіть файл зі списку.":
         yield "❌ Немає даних для аналізу."
         return
@@ -320,14 +368,9 @@ def analyze_log_with_llm(log_content, provider, model_name, openai_key, anthropi
         f"FILES (test_vault):\n{vault_state}"
     )
     
-    # Resolve correct API key
-    api_key = ""
-    if provider == "ChatGPT" or provider == "Codex API":
-        api_key = openai_key
-    elif provider == "Claude API":
-        api_key = anthropic_key
-    elif provider == "Unsloth Studio":
-        api_key = unsloth_key
+    api_key = resolve_ui_api_key(
+        provider, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+    )
 
     from llm_client import UnifiedLLMClient
     analyzer = UnifiedLLMClient(
@@ -415,6 +458,8 @@ def run_research(
     attack_prov, attack_model, attack_base,
     defend_prov, defend_model, defend_base,
     openai_key, anthropic_key, unsloth_key,
+    openrouter_key, xai_key, groq_key,
+    llm_max_requests, llm_request_delay, llm_max_retries,
     mcp_type,
     mcp_url,
     mcp_token,
@@ -434,34 +479,34 @@ def run_research(
     env_vars = os.environ.copy()
     
     # Export Attacker configuration
-    env_vars["ATTACK_PROVIDER"] = str(attack_prov or "Ollama")
+    env_vars["ATTACK_PROVIDER"] = str(attack_prov or "ollama")
     env_vars["ATTACK_MODEL_CMD"] = str(attack_model or "qwen2.5:7b")
     env_vars["ATTACK_BASE_URL"] = str(attack_base or "")
-    
-    # Resolve API Key for Attacker
-    attack_api_key = ""
-    if attack_prov == "ChatGPT" or attack_prov == "Codex API":
-        attack_api_key = openai_key
-    elif attack_prov == "Claude API":
-        attack_api_key = anthropic_key
-    elif attack_prov == "Unsloth Studio":
-        attack_api_key = unsloth_key
-    env_vars["ATTACK_API_KEY"] = str(attack_api_key or "")
+    env_vars["ATTACK_API_KEY"] = str(
+        resolve_ui_api_key(
+            attack_prov, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+        )
+        or ""
+    )
 
     # Export Defender configuration
-    env_vars["DEFEND_PROVIDER"] = str(defend_prov or "Ollama")
+    env_vars["DEFEND_PROVIDER"] = str(defend_prov or "ollama")
     env_vars["DEFEND_MODEL_CMD"] = str(defend_model or "qwen2.5:7b")
     env_vars["DEFEND_BASE_URL"] = str(defend_base or "")
-    
-    # Resolve API Key for Defender
-    defend_api_key = ""
-    if defend_prov == "ChatGPT" or defend_prov == "Codex API":
-        defend_api_key = openai_key
-    elif defend_prov == "Claude API":
-        defend_api_key = anthropic_key
-    elif defend_prov == "Unsloth Studio":
-        defend_api_key = unsloth_key
-    env_vars["DEFEND_API_KEY"] = str(defend_api_key or "")
+    env_vars["DEFEND_API_KEY"] = str(
+        resolve_ui_api_key(
+            defend_prov, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+        )
+        or ""
+    )
+
+    # Rate-limit friendly defaults (OpenRouter free ~50 req/day)
+    if llm_max_requests not in (None, ""):
+        env_vars["LLM_MAX_REQUESTS"] = str(int(llm_max_requests))
+    if llm_request_delay not in (None, ""):
+        env_vars["LLM_REQUEST_DELAY"] = str(float(llm_request_delay))
+    if llm_max_retries not in (None, ""):
+        env_vars["LLM_MAX_RETRIES"] = str(int(llm_max_retries))
 
     env_vars["MCP_TYPE"] = str(mcp_type or "Local Filesystem")
     env_vars["MCP_URL"] = str(mcp_url or "")
@@ -640,9 +685,12 @@ def delete_mcp_profile_handler(selected):
 # Secure Vault logic
 def unlock_vault_handler(password, lang="uk"):
     global decrypted_master_password, decrypted_model_keys, decrypted_mcp_servers
+    def _empty_key_updates():
+        return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+
     if not password:
         err_msg = "❌ Введіть пароль" if lang == "uk" else "❌ Enter password"
-        return (err_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+        return (err_msg, *_empty_key_updates(), gr.update(), gr.update())
         
     default_op_server = {
         "name": "OpenProject MCP",
@@ -672,8 +720,11 @@ def unlock_vault_handler(password, lang="uk"):
             gr.update(value=""),
             gr.update(value=""),
             gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
             gr.update(choices=server_choices, value="OpenProject MCP"),
-            gr.update(value=get_vault_status_text(lang))
+            gr.update(value=get_vault_status_text(lang)),
         )
     else:
         if mcp_store.verify_vault_password(password):
@@ -687,9 +738,12 @@ def unlock_vault_handler(password, lang="uk"):
                 decrypted_mcp_servers.append(default_op_server)
                 mcp_store.save_mcp_servers(password, decrypted_mcp_servers)
             
-            open_key = decrypted_model_keys.get("ChatGPT", "")
+            open_key = decrypted_model_keys.get("ChatGPT", "") or decrypted_model_keys.get("openai", "")
             anth_key = decrypted_model_keys.get("Claude API", "")
             unsloth_key = decrypted_model_keys.get("Unsloth Studio", "")
+            openrouter_key = decrypted_model_keys.get("openrouter", "") or decrypted_model_keys.get("OpenRouter", "")
+            xai_key = decrypted_model_keys.get("xai", "") or decrypted_model_keys.get("xAI", "")
+            groq_key = decrypted_model_keys.get("groq", "") or decrypted_model_keys.get("Groq", "")
             
             server_choices = [s.get("name") for s in decrypted_mcp_servers]
             success_msg = "✅ Сейф розблоковано!" if lang == "uk" else "✅ Vault unlocked!"
@@ -699,24 +753,39 @@ def unlock_vault_handler(password, lang="uk"):
                 gr.update(value=open_key),
                 gr.update(value=anth_key),
                 gr.update(value=unsloth_key),
+                gr.update(value=openrouter_key),
+                gr.update(value=xai_key),
+                gr.update(value=groq_key),
                 gr.update(choices=server_choices, value="OpenProject MCP" if "OpenProject MCP" in server_choices else (server_choices[0] if server_choices else None)),
                 gr.update(value=status_text)
             )
         else:
             err_msg = "❌ Невірний пароль" if lang == "uk" else "❌ Invalid password"
-            return (err_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+            return (err_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
-def save_keys_handler(openai_key, anthropic_key, unsloth_key, lang="uk"):
+def save_keys_handler(
+    openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key, lang="uk"
+):
     global decrypted_master_password, decrypted_model_keys
     if not decrypted_master_password:
         return "❌ Сейф заблоковано" if lang == "uk" else "❌ Vault is locked."
         
     decrypted_model_keys["ChatGPT"] = openai_key
+    decrypted_model_keys["openai"] = openai_key
     decrypted_model_keys["Claude API"] = anthropic_key
     decrypted_model_keys["Unsloth Studio"] = unsloth_key
+    decrypted_model_keys["openrouter"] = openrouter_key
+    decrypted_model_keys["xai"] = xai_key
+    decrypted_model_keys["groq"] = groq_key
     
     mcp_store.save_model_keys(decrypted_master_password, decrypted_model_keys)
     return "✅ API Ключі збережено у сейфі" if lang == "uk" else "✅ API keys securely saved in vault!"
+
+
+def export_scenarios_handler(lang="en"):
+    out = os.path.join("exports", "mcp_attack_scenarios.jsonl")
+    n = export_scenarios_jsonl(out, lang="uk" if str(lang).startswith("uk") else "en")
+    return f"✅ Exported {n} scenario(s) → `{out}` (see docs/jsonl_schema.md)"
 
 def save_mcp_server_handler(name, mcp_type_val, url, token, auth_method, oauth_id, oauth_secret, oauth_token_url, oauth_scope, ssl_verify, ssl_ca, lang="uk"):
     global decrypted_master_password, decrypted_mcp_servers
@@ -892,11 +961,19 @@ with gr.Blocks(title="MCP Security Lab") as app:
 
             keys_accordion = gr.Accordion("🔑 API Credentials / API Ключі", open=False)
             with keys_accordion:
-                openai_api_key_box = gr.Textbox(label="ChatGPT / OpenAI API Key", type="password")
+                openai_api_key_box = gr.Textbox(label="OpenAI / ChatGPT API Key", type="password")
                 anthropic_api_key_box = gr.Textbox(label="Claude / Anthropic API Key", type="password")
                 unsloth_api_key_box = gr.Textbox(label="Unsloth Studio Key / Token", type="password")
+                openrouter_api_key_box = gr.Textbox(label="OpenRouter API Key", type="password")
+                xai_api_key_box = gr.Textbox(label="xAI API Key", type="password")
+                groq_api_key_box = gr.Textbox(label="Groq API Key", type="password")
                 save_api_keys_btn = gr.Button("💾 Securely Save API Keys")
                 api_keys_status_box = gr.Markdown("")
+                gr.Markdown(
+                    "Keys are also read from `.env` / environment "
+                    "(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, …). "
+                    "See `.env.example`."
+                )
 
             gr.Markdown("### 3. Configuration / Конфігурація")
             ollama_status_box = gr.Textbox(label="Статус сервера Ollama", value=get_ollama_status_text(), interactive=False, lines=1)
@@ -1048,20 +1125,47 @@ with gr.Blocks(title="MCP Security Lab") as app:
                     attack_accordion = gr.Accordion("🔴 Налаштування Агента-нападника (Attacker)", open=True)
                     with attack_accordion:
                         attack_prov_box = gr.Dropdown(
-                            choices=["Ollama", "Unsloth Studio", "ChatGPT", "Claude API", "Codex API", "Claude Code CLI", "Copilot CLI", "Agy CLI", "Codex CLI"],
-                            label="Attacker LLM Engine / Provider", value="Ollama"
+                            choices=ATTACK_PROVIDER_CHOICES,
+                            label="Attacker LLM Engine / Provider",
+                            value="ollama",
+                            info="OpenAI-compatible: ollama, openai, openrouter (:free), xai, groq",
                         )
-                        attack_model_box = gr.Textbox(label="Model Name / Command (Executable)", value="qwen2.5:7b", info="e.g. 'gpt-4o' or executable path 'claude'")
-                        attack_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:8888/v1")
+                        attack_model_box = gr.Textbox(
+                            label="Model Name / Command (Executable)",
+                            value="qwen2.5:7b",
+                            info="e.g. qwen2.5:7b | gpt-4o-mini | meta-llama/llama-3.2-3b-instruct:free | claude",
+                        )
+                        attack_base_box = gr.Textbox(
+                            label="Custom Base URL (optional)",
+                            placeholder="http://localhost:11434/v1 or https://openrouter.ai/api/v1",
+                        )
 
                     defend_accordion = gr.Accordion("🛡️ Налаштування ШІ-судді (Defender)", open=False)
                     with defend_accordion:
                         defend_prov_box = gr.Dropdown(
-                            choices=["Ollama", "Unsloth Studio", "ChatGPT", "Claude API", "Codex API"],
-                            label="Defender LLM Engine / Provider", value="Ollama"
+                            choices=DEFEND_PROVIDER_CHOICES,
+                            label="Defender LLM Engine / Provider",
+                            value="ollama",
                         )
                         defend_model_box = gr.Textbox(label="Defender Model Name", value="qwen2.5:7b")
-                        defend_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:8888/v1")
+                        defend_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:11434/v1")
+
+                    with gr.Accordion("⏱️ Rate limits (quota-friendly)", open=False):
+                        llm_max_requests_box = gr.Number(
+                            label="Max LLM requests this run (LLM_MAX_REQUESTS)",
+                            value=None,
+                            precision=0,
+                            info="Stop after N calls — useful for OpenRouter free (~50/day)",
+                        )
+                        llm_request_delay_box = gr.Number(
+                            label="Delay between requests, seconds (LLM_REQUEST_DELAY)",
+                            value=0.0,
+                        )
+                        llm_max_retries_box = gr.Number(
+                            label="Max 429 retries with backoff (LLM_MAX_RETRIES)",
+                            value=5,
+                            precision=0,
+                        )
 
                     custom_prompt = gr.Textbox(
                         label="Завдання для ШІ-агента (Custom Prompt)", 
@@ -1097,11 +1201,12 @@ with gr.Blocks(title="MCP Security Lab") as app:
                     analyze_accordion = gr.Accordion("🤖 Налаштування ШІ-аудитора (Analyzer)", open=False)
                     with analyze_accordion:
                         analyze_prov_box = gr.Dropdown(
-                            choices=["Ollama", "Unsloth Studio", "ChatGPT", "Claude API", "Codex API"],
-                            label="Analyzer LLM Engine / Provider", value="Ollama"
+                            choices=DEFEND_PROVIDER_CHOICES,
+                            label="Analyzer LLM Engine / Provider",
+                            value="ollama",
                         )
                         analyze_model_box = gr.Textbox(label="Analyzer Model Name", value="qwen2.5:7b")
-                        analyze_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:8888/v1")
+                        analyze_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:11434/v1")
                     
                     with gr.Row():
                         analyze_btn = gr.Button("🔍 Проаналізувати поточний лог за допомогою обраної моделі ШІ", variant="primary")
@@ -1112,6 +1217,13 @@ with gr.Blocks(title="MCP Security Lab") as app:
                     gr.Markdown("---")
                     gr.Markdown("### 📄 Академічний звіт для дисертації / Thesis Report")
                     thesis_report_viewer = gr.Markdown("*Тут буде академічний звіт після генерації...*")
+
+                    gr.Markdown("### 📤 JSONL export for MCP-Sentinel evaluation")
+                    export_scenarios_btn = gr.Button("📤 Export attack scenarios (JSONL)", variant="secondary")
+                    export_scenarios_status = gr.Markdown(
+                        "*Exports labelled attack traces for the external Sentinel guard "
+                        "(built in LLM-tester-tool). See docs/jsonl_schema.md.*"
+                    )
 
                 with gr.Tab("📂 Payload-менеджер (Ін'єкції)"):
                     gr.Markdown("Керування файлами у `test_vault`. Тут можна редагувати файли для Prompt Injection або завантажити власні тести.")
@@ -1159,12 +1271,30 @@ with gr.Blocks(title="MCP Security Lab") as app:
     unlock_vault_btn.click(
         fn=unlock_vault_handler,
         inputs=[master_pwd_box, lang_toggle],
-        outputs=[vault_msg_box, openai_api_key_box, anthropic_api_key_box, unsloth_api_key_box, mcp_history_drop, vault_status_box]
+        outputs=[
+            vault_msg_box,
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            mcp_history_drop,
+            vault_status_box,
+        ],
     )
     save_api_keys_btn.click(
         fn=save_keys_handler,
-        inputs=[openai_api_key_box, anthropic_api_key_box, unsloth_api_key_box, lang_toggle],
-        outputs=[api_keys_status_box]
+        inputs=[
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            lang_toggle,
+        ],
+        outputs=[api_keys_status_box],
     )
     
     # MCP Servers History wiring
@@ -1262,6 +1392,8 @@ with gr.Blocks(title="MCP Security Lab") as app:
             attack_prov_box, attack_model_box, attack_base_box,
             defend_prov_box, defend_model_box, defend_base_box,
             openai_api_key_box, anthropic_api_key_box, unsloth_api_key_box,
+            openrouter_api_key_box, xai_api_key_box, groq_api_key_box,
+            llm_max_requests_box, llm_request_delay_box, llm_max_retries_box,
             mcp_type,
             mcp_url,
             mcp_token,
@@ -1290,7 +1422,19 @@ with gr.Blocks(title="MCP Security Lab") as app:
     
     analyze_btn.click(
         fn=analyze_log_with_llm,
-        inputs=[log_viewer, analyze_prov_box, analyze_model_box, openai_api_key_box, anthropic_api_key_box, unsloth_api_key_box, analyze_base_box, lang_toggle],
+        inputs=[
+            log_viewer,
+            analyze_prov_box,
+            analyze_model_box,
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            analyze_base_box,
+            lang_toggle,
+        ],
         outputs=[analysis_result],
     )
 
@@ -1298,6 +1442,12 @@ with gr.Blocks(title="MCP Security Lab") as app:
         fn=generate_thesis_report_handler,
         inputs=[log_dropdown, lang_toggle],
         outputs=[thesis_report_viewer]
+    )
+
+    export_scenarios_btn.click(
+        fn=export_scenarios_handler,
+        inputs=[lang_toggle],
+        outputs=[export_scenarios_status],
     )
 
     refresh_vault_btn.click(fn=lambda: gr.update(choices=get_vault_files()), outputs=[vault_files_drop])
