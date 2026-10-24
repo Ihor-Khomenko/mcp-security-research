@@ -87,7 +87,7 @@ def load_profile(name: str, password: str) -> dict:
 
 def list_profiles() -> list[str]:
     ensure_dir()
-    return sorted(p.stem for p in PROFILES_DIR.glob("*.enc"))
+    return sorted(p.stem for p in PROFILES_DIR.glob("*.enc") if not p.stem.startswith("_"))
 
 
 def delete_profile(name: str) -> None:
@@ -96,3 +96,104 @@ def delete_profile(name: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"Profile not found: {name!r}")
     path.unlink()
+
+
+def is_vault_initialized() -> bool:
+    return (PROFILES_DIR / "_vault_verify.enc").is_file()
+
+
+def initialize_vault(password: str) -> None:
+    ensure_dir()
+    salt = os.urandom(SALT_LEN)
+    key = _derive_key(password, salt)
+    fernet = Fernet(key)
+    payload = json.dumps({"verified": True}).encode("utf-8")
+    ciphertext = fernet.encrypt(payload)
+    wrapper = {
+        "version": VERSION,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+    path = PROFILES_DIR / "_vault_verify.enc"
+    path.write_text(json.dumps(wrapper), encoding="utf-8")
+
+
+def verify_vault_password(password: str) -> bool:
+    path = PROFILES_DIR / "_vault_verify.enc"
+    if not path.is_file():
+        return False
+    try:
+        wrapper = json.loads(path.read_text(encoding="utf-8"))
+        salt = base64.b64decode(wrapper["salt"])
+        ciphertext = base64.b64decode(wrapper["ciphertext"])
+        key = _derive_key(password, salt)
+        fernet = Fernet(key)
+        payload = fernet.decrypt(ciphertext)
+        return json.loads(payload.decode("utf-8")).get("verified") is True
+    except Exception:
+        return False
+
+
+def save_model_keys(password: str, keys: dict) -> None:
+    ensure_dir()
+    salt = os.urandom(SALT_LEN)
+    key = _derive_key(password, salt)
+    fernet = Fernet(key)
+    payload = json.dumps(keys, ensure_ascii=False).encode("utf-8")
+    ciphertext = fernet.encrypt(payload)
+    wrapper = {
+        "version": VERSION,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+    path = PROFILES_DIR / "_vault_model_keys.enc"
+    path.write_text(json.dumps(wrapper), encoding="utf-8")
+
+
+def load_model_keys(password: str) -> dict:
+    path = PROFILES_DIR / "_vault_model_keys.enc"
+    if not path.is_file():
+        return {}
+    wrapper = json.loads(path.read_text(encoding="utf-8"))
+    salt = base64.b64decode(wrapper["salt"])
+    ciphertext = base64.b64decode(wrapper["ciphertext"])
+    key = _derive_key(password, salt)
+    fernet = Fernet(key)
+    try:
+        payload = fernet.decrypt(ciphertext)
+    except Exception as e:
+        raise ValueError("Wrong master password or corrupted keys vault.") from e
+    return json.loads(payload.decode("utf-8"))
+
+
+def save_mcp_servers(password: str, servers: list) -> None:
+    ensure_dir()
+    salt = os.urandom(SALT_LEN)
+    key = _derive_key(password, salt)
+    fernet = Fernet(key)
+    payload = json.dumps(servers, ensure_ascii=False).encode("utf-8")
+    ciphertext = fernet.encrypt(payload)
+    wrapper = {
+        "version": VERSION,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+    path = PROFILES_DIR / "_vault_mcp_servers.enc"
+    path.write_text(json.dumps(wrapper), encoding="utf-8")
+
+
+def load_mcp_servers(password: str) -> list:
+    path = PROFILES_DIR / "_vault_mcp_servers.enc"
+    if not path.is_file():
+        return []
+    wrapper = json.loads(path.read_text(encoding="utf-8"))
+    salt = base64.b64decode(wrapper["salt"])
+    ciphertext = base64.b64decode(wrapper["ciphertext"])
+    key = _derive_key(password, salt)
+    fernet = Fernet(key)
+    try:
+        payload = fernet.decrypt(ciphertext)
+    except Exception as e:
+        raise ValueError("Wrong master password or corrupted servers vault.") from e
+    return json.loads(payload.decode("utf-8"))
+
