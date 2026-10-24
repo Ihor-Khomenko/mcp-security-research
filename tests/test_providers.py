@@ -42,6 +42,12 @@ class TestProviderConfig(unittest.TestCase):
         self.assertEqual(rl.max_requests, 3)
         self.assertEqual(rl.delay, 0.5)
 
+    def test_rate_limit_zero_means_unlimited(self):
+        # CI sets LLM_MAX_REQUESTS=0 as a safety default; that must not block mocks.
+        with patch.dict(os.environ, {"LLM_MAX_REQUESTS": "0"}, clear=False):
+            rl = load_rate_limit_params()
+        self.assertIsNone(rl.max_requests)
+
 
 class TestLLMProviderMocked(unittest.TestCase):
     @patch("providers.openai_compat.OpenAI")

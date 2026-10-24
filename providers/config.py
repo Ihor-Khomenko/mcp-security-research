@@ -132,6 +132,10 @@ def load_rate_limit_params(
     resolved_max = max_requests
     if resolved_max is None and env_max not in (None, ""):
         resolved_max = int(env_max)
+    # Treat 0 / negative as "unlimited" so CI can set LLM_MAX_REQUESTS=0
+    # without blocking mocked unit tests that still exercise the client path.
+    if resolved_max is not None and resolved_max <= 0:
+        resolved_max = None
 
     resolved_delay = delay
     if resolved_delay is None:

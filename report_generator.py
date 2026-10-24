@@ -73,6 +73,22 @@ def generate_thesis_report(log_filepath):
         if "🤖 [" in line or "✅ [" in line or "🛡️ [" in line or "🚨 [" in line or "⚖️" in line:
             steps.append(line.strip())
 
+    # Precompute fragments — Python 3.11 disallows backslashes inside f-string expressions.
+    steps_md = (
+        "\n".join(f"* {step}" for step in steps)
+        if steps
+        else "*No intermediate tool steps logged.*"
+    )
+    if "advanced" in script_name:
+        security_control = "LLM-as-a-Judge (Semantic Guard)"
+    elif "defense_sim" in script_name:
+        security_control = "Static Whitelist (RBAC)"
+    elif "bypass" in script_name:
+        security_control = "Naive Directory Checking"
+    else:
+        security_control = "None (Unrestricted Endpoint)"
+    transport = conn_type_match.group(1) if conn_type_match else "Local Filesystem stdio"
+
     # Build Markdown Report
     report_md = f"""# Thesis Experiment Report: Model Context Protocol (MCP) Security Audit
 
@@ -86,10 +102,10 @@ def generate_thesis_report(log_filepath):
 ---
 
 ## ⚙️ Environment Configuration
-* **Connection Transport**: `{conn_type_match.group(1) if conn_type_match else "Local Filesystem stdio"}`
+* **Connection Transport**: `{transport}`
 * **Attacker Backend**: `{attacker_provider}`
 * **Attacker Model / Executable**: `{attacker_model}`
-* **Security Control Level**: `{ "LLM-as-a-Judge (Semantic Guard)" if "advanced" in script_name else "Static Whitelist (RBAC)" if "defense_sim" in script_name else "Naive Directory Checking" if "bypass" in script_name else "None (Unrestricted Endpoint)"}`
+* **Security Control Level**: `{security_control}`
 
 ---
 
@@ -104,7 +120,7 @@ def generate_thesis_report(log_filepath):
 ---
 
 ## 📝 Subsystem Execution Trace (Filtered Steps)
-{"\n".join([f"* {step}" for step in steps]) if steps else "*No intermediate tool steps logged.*"}
+{steps_md}
 
 ---
 
