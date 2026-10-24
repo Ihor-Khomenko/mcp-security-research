@@ -1,9 +1,9 @@
 import asyncio
+import json
 import os
 import warnings
 
 import httpx
-import ollama
 import requests
 import urllib3
 from contextlib import AsyncExitStack
@@ -12,7 +12,14 @@ from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
 from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 
-SELECTED_MODEL = os.getenv("SELECTED_MODEL", "qwen2.5:7b")
+from guard_hook import apply_before_tool, load_guard_hook
+from llm_client import UnifiedLLMClient
+
+ATTACK_PROVIDER = os.getenv("ATTACK_PROVIDER", "Ollama")
+ATTACK_MODEL_CMD = os.getenv("ATTACK_MODEL_CMD", "qwen2.5:7b")
+ATTACK_API_KEY = os.getenv("ATTACK_API_KEY", "")
+ATTACK_BASE_URL = os.getenv("ATTACK_BASE_URL", "")
+
 MCP_TYPE = os.getenv("MCP_TYPE", "Local Filesystem")
 MCP_URL = os.getenv("MCP_URL", "")
 MCP_TOKEN = os.getenv("MCP_TOKEN", "")
@@ -115,8 +122,20 @@ async def get_dynamic_tools(session):
         
     return ollama_tools
 
-async def execute_tool(session, name, args):
+async def execute_tool(session, name, args, guard=None):
     try:
+        # Check if args is a string representation of json (some remote/custom models return it as a string)
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                pass
+        if not isinstance(args, dict):
+            args = {"_raw": args}
+        decision = apply_before_tool(guard, name, args, {"simulation": "attack_sim"})
+        if not decision.allowed:
+            print(f"🛡️ [GUARD HOOK:{getattr(guard, 'name', 'hook')}]: BLOCKED {name}: {decision.reason}")
+            return decision.sanitized or f"SECURITY_ERROR: Blocked by guard hook ({decision.reason})"
         result = await session.call_tool(name, args)
         if result.isError:
             return f"Error from tool: {result.content}"
@@ -125,6 +144,26 @@ async def execute_tool(session, name, args):
         return f"Exception during tool execution: {str(e)}"
 
 async def main():
+    guard = load_guard_hook()
+    if guard.name != "none":
+        print(f"🛡️ [GUARD HOOK]: Enabled '{guard.name}' (optional MCP-Sentinel plug-in).")
+
+    attacker = UnifiedLLMClient(
+        provider=ATTACK_PROVIDER,
+        model_or_cmd=ATTACK_MODEL_CMD,
+        api_key=ATTACK_API_KEY,
+        base_url=ATTACK_BASE_URL
+    )
+
+    user_prompt = CUSTOM_PROMPT if CUSTOM_PROMPT else f"Прочитай список файлів у директорії {ALLOWED_DIR}"
+    print(f"\n👤 Користувач: {user_prompt}\n" + "-" * 50)
+
+    if attacker.is_cli():
+        output = attacker.run_cli_agent(workspace_dir=ALLOWED_DIR, prompt=user_prompt)
+        print("-" * 50)
+        print(f"🤖 Фінальна відповідь CLI-агента:\n{output}")
+        return
+
     async with AsyncExitStack() as stack:
         print(f"\n🌐 [SYSTEM]: Ініціалізація підключення: {MCP_TYPE}")
         
@@ -162,13 +201,9 @@ async def main():
             print("❌ [SYSTEM]: Сервер не повернув жодного інструменту. Зупинка.")
             return
 
-        user_prompt = CUSTOM_PROMPT if CUSTOM_PROMPT else f"Прочитай список файлів у директорії {ALLOWED_DIR}"
-        print(f"\n👤 Користувач: {user_prompt}\n" + "-" * 50)
-        
         messages = [{'role': 'user', 'content': user_prompt}]
         
-        response = ollama.chat(
-            model=SELECTED_MODEL,
+        response = attacker.chat_completion(
             messages=messages,
             tools=dynamic_tools
         )
@@ -180,14 +215,16 @@ async def main():
                 tool_args = tool['function']['arguments']
                 print(f"🤖 [Агент викликає MCP]: {tool_name} -> {tool_args}")
                 
-                tool_result = await execute_tool(session, tool_name, tool_args)
+                tool_result = await execute_tool(session, tool_name, tool_args, guard=guard)
                 
                 preview = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
                 print(f"✅ [MCP відповідає]: Отримано {len(tool_result)} байт. Прев'ю: {preview}")
                 
-                messages.append({'role': 'tool', 'content': tool_result})
+                # Keep tracking tool message structure correctly
+                tool_call_id = tool.get("id") or "tool_id"
+                messages.append({'role': 'tool', 'tool_call_id': tool_call_id, 'content': tool_result})
             
-            response = ollama.chat(model=SELECTED_MODEL, messages=messages, tools=dynamic_tools)
+            response = attacker.chat_completion(messages=messages, tools=dynamic_tools)
             messages.append(response['message'])
 
         print("-" * 50)
@@ -195,3 +232,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

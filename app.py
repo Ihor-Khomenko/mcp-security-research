@@ -10,6 +10,14 @@ import shutil
 from datetime import datetime
 
 import mcp_profile_store as mcp_store
+import report_generator
+from providers.config import UI_PROVIDER_CHOICES, normalize_provider_name
+from scenarios.export import export_scenarios_jsonl
+
+ATTACK_PROVIDER_CHOICES = list(UI_PROVIDER_CHOICES)
+DEFEND_PROVIDER_CHOICES = [
+    c for c in UI_PROVIDER_CHOICES if c not in ("Claude Code CLI", "Copilot CLI", "Agy CLI", "Codex CLI")
+]
 
 VENV_DIR = "ui-env"
 LOGS_DIR = "research_logs"
@@ -23,6 +31,11 @@ os.makedirs(VAULT_DIR, exist_ok=True)
 os.makedirs(PROMPTS_DIR, exist_ok=True)
 mcp_store.ensure_dir()
 
+# Global decrypted vault state
+decrypted_master_password = None
+decrypted_model_keys = {}
+decrypted_mcp_servers = []
+
 SCRIPT_NAMES_MAP = {
     "mcp-test": "🔍 Діагностика",
     "attack_sim": "🔴 Базова атака",
@@ -32,6 +45,173 @@ SCRIPT_NAMES_MAP = {
 }
 
 FILTER_CHOICES = [("Всі (All)", "Всі (All)")] + [(name, key) for key, name in SCRIPT_NAMES_MAP.items()]
+
+UI_TRANSLATIONS = {
+    "uk": {
+        "title": "# MCP Security Research Lab by Ihor Khomenko",
+        "setup_header": "### 1. Setup / Налаштування",
+        "setup_btn": "🚀 Створити середовище дослідження",
+        "status_label": "Статус VENV",
+        "config_header": "### 2. Configuration / Конфігурація",
+        "ollama_status": "Статус сервера Ollama",
+        "ram_status": "Моделі в пам'яті (RAM/VRAM)",
+        "model_drop": "Оберіть модель LLM",
+        "refresh_btn": "🔄 Оновити",
+        "start_ollama": "▶️ Запустити сервер",
+        "preload_btn": "⚡ Розігріти модель",
+        "mcp_type": "Тип підключення MCP",
+        "mcp_url": "MCP URL",
+        "mcp_token": "Токен авторизації",
+        "mcp_auth_method": "Метод авторизації віддаленого сервера",
+        "oauth_client_id": "OAuth Client ID",
+        "oauth_client_secret": "OAuth Client Secret",
+        "oauth_token_url": "OAuth Token URL",
+        "oauth_scope": "OAuth Scope",
+        "ssl_verify": "Перевіряти SSL (TLS)",
+        "ssl_ca": "Файл CA сертифіката (.pem)",
+        "saved_profiles": "### Saved MCP profiles / Збережені профілі MCP",
+        "profile_dropdown": "Збережений профіль",
+        "profile_name": "Ім'я профілю (для збереження)",
+        "profile_pwd": "Пароль профілю",
+        "profile_pwd_confirm": "Підтвердити пароль",
+        "profile_save": "💾 Зберегти профіль",
+        "profile_load": "📂 Завантажити профіль",
+        "profile_delete": "🗑️ Видалити профіль",
+        "run_tab": "▶️ Виконання (Live)",
+        "vector_label": "Вектор дослідження",
+        "custom_prompt": "Завдання для ШІ-агента (Custom Prompt)",
+        "run_btn": "⚡ Запустити симуляцію",
+        "run_status": "Статус виконання",
+        "terminal_tab": "📝 Термінал (Live Logs)",
+        "error_tab": "⚠️ Системні помилки",
+        "history_tab": "📊 Історія та AI-Аналіз",
+        "log_filter": "Фільтр за типом",
+        "log_dropdown": "Оберіть лог для перегляду",
+        "log_viewer": "Вміст збереженого логу",
+        "log_delete_btn": "🗑️ Видалити лог",
+        "ai_judge_header": "### 🤖 Оцінка результатів (LLM-as-a-Judge)",
+        "analyze_btn": "🔍 Проаналізувати поточний лог за допомогою обраної моделі ШІ",
+        "payload_tab": "📂 Payload-менеджер (Ін'єкції)",
+        "payload_drop": "Оберіть файл для редагування",
+        "payload_editor": "Вміст файлу (Можна редагувати)",
+        "payload_save": "💾 Зберегти зміни",
+        "upload_label": "Завантажити .txt або .json файл",
+        # New translation strings
+        "vault_header": "### 🔑 Master Vault / Захищене сховище",
+        "vault_pwd": "Введіть Master Password / Головний пароль",
+        "vault_unlock_btn": "🔓 Ініціалізувати або розблокувати сховище",
+        "keys_accordion": "🔑 API Credentials / API Ключі",
+        "save_keys_btn": "💾 Надійно зберегти API ключі",
+        "attack_accordion": "🔴 Налаштування Агента-нападника (Attacker)",
+        "defend_accordion": "🛡️ Налаштування ШІ-судді (Defender)",
+        "analyze_accordion": "🤖 Налаштування ШІ-аудитора (Analyzer)",
+        "mcp_history_drop": "Збережені сервери MCP (Історія)",
+        "mcp_save_name": "Зберегти конфігурацію як ім'я",
+        "mcp_save_btn": "💾 Зберегти конфігурацію сервера",
+        "mcp_delete_btn": "🗑️ Видалити конфігурацію сервера",
+        "thesis_report_btn": "📄 Згенерувати академічний звіт для дисертації",
+        "mcp_template_btn": "⚡ Шаблон OpenProject",
+    },
+    "en": {
+        "title": "# MCP Security Research Lab by Ihor Khomenko",
+        "setup_header": "### 1. Setup",
+        "setup_btn": "🚀 Build Research Environment",
+        "status_label": "VENV Status",
+        "config_header": "### 2. Configuration",
+        "ollama_status": "Ollama Server Status",
+        "ram_status": "Models in VRAM/RAM",
+        "model_drop": "Select LLM Model",
+        "refresh_btn": "🔄 Refresh",
+        "start_ollama": "▶️ Start Ollama Server",
+        "preload_btn": "⚡ Warm up Model",
+        "mcp_type": "MCP Connection Type",
+        "mcp_url": "MCP URL",
+        "mcp_token": "Auth Token",
+        "mcp_auth_method": "Remote Auth Method",
+        "oauth_client_id": "OAuth Client ID",
+        "oauth_client_secret": "OAuth Client Secret",
+        "oauth_token_url": "OAuth Token URL",
+        "oauth_scope": "OAuth Scope",
+        "ssl_verify": "Verify TLS (SSL)",
+        "ssl_ca": "TLS CA bundle (.pem)",
+        "saved_profiles": "### Saved MCP profiles",
+        "profile_dropdown": "Saved profile",
+        "profile_name": "Profile name (to save)",
+        "profile_pwd": "Profile Password",
+        "profile_pwd_confirm": "Confirm Password",
+        "profile_save": "💾 Save profile",
+        "profile_load": "📂 Load profile",
+        "profile_delete": "🗑️ Delete profile",
+        "run_tab": "▶️ Execution (Live)",
+        "vector_label": "Research Vector",
+        "custom_prompt": "Task for AI Agent (Custom Prompt)",
+        "run_btn": "⚡ Run Simulation",
+        "run_status": "Execution Status",
+        "terminal_tab": "📝 Terminal (Live Logs)",
+        "error_tab": "⚠️ System Errors",
+        "history_tab": "📊 History & AI Analysis",
+        "log_filter": "Filter by type",
+        "log_dropdown": "Select log file to view",
+        "log_viewer": "Saved log content",
+        "log_delete_btn": "🗑️ Delete log",
+        "ai_judge_header": "### 🤖 Results Evaluation (LLM-as-a-Judge)",
+        "analyze_btn": "🔍 Analyze current log with selected AI model",
+        "payload_tab": "📂 Payload Manager (Injections)",
+        "payload_drop": "Select file to edit",
+        "payload_editor": "File content (Editable)",
+        "payload_save": "💾 Save changes",
+        "upload_label": "Upload .txt or .json file",
+        # New translation strings
+        "vault_header": "### 🔑 Master Vault / Protected Storage",
+        "vault_pwd": "Enter Master Password",
+        "vault_unlock_btn": "🔓 Initialize or Unlock Vault",
+        "keys_accordion": "🔑 API Credentials / API Keys",
+        "save_keys_btn": "💾 Securely Save API Keys",
+        "attack_accordion": "🔴 Attacker Model Config",
+        "defend_accordion": "🛡️ Defender Model Config (Judge)",
+        "analyze_accordion": "🤖 Analyzer Model Config",
+        "mcp_history_drop": "Saved MCP Servers History",
+        "mcp_save_name": "Save configuration as name",
+        "mcp_save_btn": "💾 Save Server Config",
+        "mcp_delete_btn": "🗑️ Delete Server Config",
+        "thesis_report_btn": "📄 Generate Academic Thesis Report",
+        "mcp_template_btn": "⚡ OpenProject Template",
+    }
+}
+
+def check_tool(cmd):
+    return shutil.which(cmd) is not None
+
+def check_local_tools():
+    # Diagnostics check based on operating system
+    tools = {
+        "Ollama CLI": check_tool("ollama"),
+        "Unsloth CLI": check_tool("unsloth"),
+        "Claude Code CLI": check_tool("claude") or check_tool("claude-code"),
+        "Copilot / GitHub CLI": check_tool("copilot") or check_tool("gh"),
+        "Agy CLI": check_tool("agy"),
+        "Codex CLI": check_tool("codex"),
+        "Node (npx)": check_tool("npx"),
+    }
+    return tools
+
+def get_local_tools_markdown(lang="uk"):
+    status = check_local_tools()
+    title = "### 🖥️ Локальні інструменти / Local Tools Status\n" if lang == "uk" else "### 🖥️ Local Environment Diagnostics\n"
+    md = title
+    for tool, available in status.items():
+        if lang == "uk":
+            icon = "🟢 Наявний (Available)" if available else "🔴 Відсутній (Not found)"
+        else:
+            icon = "🟢 Available" if available else "🔴 Not found"
+        md += f"* **{tool}**: {icon}\n"
+    return md
+
+def get_vault_status_text(lang="uk"):
+    if mcp_store.is_vault_initialized():
+        return "🔒 Сейф заблоковано (Ініціалізовано раніше) / Vault locked (Initialized)" if lang == "uk" else "🔒 Vault locked (Initialized)"
+    else:
+        return "🆕 Сейф не ініціалізовано / Vault not initialized (Set password to start)" if lang == "uk" else "🆕 Vault not initialized (Set password to start)"
 
 def play_success_sound():
     try:
@@ -115,7 +295,48 @@ def delete_log_file(filename, current_filter):
     new_val = updated_logs[0][1] if updated_logs else None
     return gr.update(choices=updated_logs, value=new_val), "Файл видалено."
 
-def analyze_log_with_llm(log_content, model_name, lang, progress=gr.Progress()):
+def resolve_ui_api_key(
+    provider,
+    openai_key="",
+    anthropic_key="",
+    unsloth_key="",
+    openrouter_key="",
+    xai_key="",
+    groq_key="",
+):
+    """Pick the API key field / env var for the selected provider label."""
+    name = normalize_provider_name(provider)
+    if provider == "Claude API":
+        return anthropic_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if provider == "Unsloth Studio":
+        return unsloth_key or openai_key or os.environ.get("OPENAI_API_KEY", "")
+    if name == "openai" or provider in ("ChatGPT", "Codex API", "OpenAI"):
+        return openai_key or os.environ.get("OPENAI_API_KEY", "")
+    if name == "openrouter":
+        return openrouter_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if name == "xai":
+        return xai_key or os.environ.get("XAI_API_KEY", "")
+    if name == "groq":
+        return groq_key or os.environ.get("GROQ_API_KEY", "")
+    if name == "ollama":
+        return os.environ.get("OLLAMA_API_KEY", "ollama")
+    return openai_key or ""
+
+
+def analyze_log_with_llm(
+    log_content,
+    provider,
+    model_name,
+    openai_key,
+    anthropic_key,
+    unsloth_key,
+    openrouter_key,
+    xai_key,
+    groq_key,
+    base_url,
+    lang,
+    progress=gr.Progress(),
+):
     if not log_content or log_content == "Оберіть файл зі списку.":
         yield "❌ Немає даних для аналізу."
         return
@@ -147,15 +368,23 @@ def analyze_log_with_llm(log_content, model_name, lang, progress=gr.Progress()):
         f"FILES (test_vault):\n{vault_state}"
     )
     
-    full_response = ""
+    api_key = resolve_ui_api_key(
+        provider, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+    )
+
+    from llm_client import UnifiedLLMClient
+    analyzer = UnifiedLLMClient(
+        provider=provider,
+        model_or_cmd=model_name,
+        api_key=api_key,
+        base_url=base_url
+    )
+    
     try:
-        response = requests.post(f"{OLLAMA_API}/generate", 
-                                 json={"model": model_name, "prompt": full_prompt, "stream": True}, 
-                                 stream=True)
-        for line in response.iter_lines():
-            if line:
-                full_response += json.loads(line).get('response', '')
-                yield full_response
+        response = analyzer.chat_completion(
+            messages=[{'role': 'user', 'content': full_prompt}]
+        )
+        yield response['message']['content']
         play_success_sound()
     except Exception as e:
         yield f"❌ Помилка: {e}"
@@ -187,10 +416,10 @@ def get_models():
         except: return ["Помилка отримання моделей"]
     return ["Ollama не запущена"]
 
-def refresh_ui(current_filter):
+def refresh_ui(current_filter, lang="uk"):
     logs = get_log_files(current_filter)
     new_val = logs[0][1] if logs else None
-    return get_ollama_status_text(), gr.update(choices=get_models()), get_loaded_models_text(), gr.update(choices=logs, value=new_val)
+    return get_ollama_status_text(), gr.update(choices=get_models()), get_loaded_models_text(), gr.update(choices=logs, value=new_val), get_local_tools_markdown(lang)
 
 def start_ollama():
     if check_ollama(): return get_ollama_status_text(), gr.update(choices=get_models()), get_loaded_models_text()
@@ -226,7 +455,11 @@ def setup_env_progress(progress=gr.Progress()):
 
 def run_research(
     script,
-    model,
+    attack_prov, attack_model, attack_base,
+    defend_prov, defend_model, defend_base,
+    openai_key, anthropic_key, unsloth_key,
+    openrouter_key, xai_key, groq_key,
+    llm_max_requests, llm_request_delay, llm_max_retries,
     mcp_type,
     mcp_url,
     mcp_token,
@@ -244,7 +477,37 @@ def run_research(
 ):
     progress(0, desc="Ініціалізація")
     env_vars = os.environ.copy()
-    env_vars["SELECTED_MODEL"] = str(model or "qwen2.5:7b")
+    
+    # Export Attacker configuration
+    env_vars["ATTACK_PROVIDER"] = str(attack_prov or "ollama")
+    env_vars["ATTACK_MODEL_CMD"] = str(attack_model or "qwen2.5:7b")
+    env_vars["ATTACK_BASE_URL"] = str(attack_base or "")
+    env_vars["ATTACK_API_KEY"] = str(
+        resolve_ui_api_key(
+            attack_prov, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+        )
+        or ""
+    )
+
+    # Export Defender configuration
+    env_vars["DEFEND_PROVIDER"] = str(defend_prov or "ollama")
+    env_vars["DEFEND_MODEL_CMD"] = str(defend_model or "qwen2.5:7b")
+    env_vars["DEFEND_BASE_URL"] = str(defend_base or "")
+    env_vars["DEFEND_API_KEY"] = str(
+        resolve_ui_api_key(
+            defend_prov, openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key
+        )
+        or ""
+    )
+
+    # Rate-limit friendly defaults (OpenRouter free ~50 req/day)
+    if llm_max_requests not in (None, ""):
+        env_vars["LLM_MAX_REQUESTS"] = str(int(llm_max_requests))
+    if llm_request_delay not in (None, ""):
+        env_vars["LLM_REQUEST_DELAY"] = str(float(llm_request_delay))
+    if llm_max_retries not in (None, ""):
+        env_vars["LLM_MAX_RETRIES"] = str(int(llm_max_retries))
+
     env_vars["MCP_TYPE"] = str(mcp_type or "Local Filesystem")
     env_vars["MCP_URL"] = str(mcp_url or "")
     env_vars["MCP_TOKEN"] = str(mcp_token or "")
@@ -419,10 +682,260 @@ def delete_mcp_profile_handler(selected):
         return f"**Помилка / Error:** {e}", gr.update()
 
 
+# Secure Vault logic
+def unlock_vault_handler(password, lang="uk"):
+    global decrypted_master_password, decrypted_model_keys, decrypted_mcp_servers
+    def _empty_key_updates():
+        return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+
+    if not password:
+        err_msg = "❌ Введіть пароль" if lang == "uk" else "❌ Enter password"
+        return (err_msg, *_empty_key_updates(), gr.update(), gr.update())
+        
+    default_op_server = {
+        "name": "OpenProject MCP",
+        "mcp_type": "Remote URL",
+        "mcp_url": "https://openproject.test/mcp",
+        "mcp_token": "",
+        "mcp_auth_method": "oauth_client_credentials",
+        "oauth_client_id": "test_client_id",
+        "oauth_client_secret": "test_client_secret",
+        "oauth_token_url": "https://openproject.test/oauth/token",
+        "oauth_scope": "mcp",
+        "mcp_ssl_verify": True,
+        "mcp_ssl_ca_bundle": ""
+    }
+
+    if not mcp_store.is_vault_initialized():
+        mcp_store.initialize_vault(password)
+        decrypted_master_password = password
+        decrypted_model_keys = {}
+        decrypted_mcp_servers = [default_op_server]
+        mcp_store.save_model_keys(password, {})
+        mcp_store.save_mcp_servers(password, decrypted_mcp_servers)
+        server_choices = ["OpenProject MCP"]
+        success_msg = "✅ Сейф ініціалізовано та розблоковано!" if lang == "uk" else "✅ Vault initialized & unlocked!"
+        return (
+            success_msg,
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(choices=server_choices, value="OpenProject MCP"),
+            gr.update(value=get_vault_status_text(lang)),
+        )
+    else:
+        if mcp_store.verify_vault_password(password):
+            decrypted_master_password = password
+            decrypted_model_keys = mcp_store.load_model_keys(password)
+            decrypted_mcp_servers = mcp_store.load_mcp_servers(password)
+            
+            # Auto-populate OpenProject MCP config if not present
+            has_op = any(s.get("name") == "OpenProject MCP" for s in decrypted_mcp_servers)
+            if not has_op:
+                decrypted_mcp_servers.append(default_op_server)
+                mcp_store.save_mcp_servers(password, decrypted_mcp_servers)
+            
+            open_key = decrypted_model_keys.get("ChatGPT", "") or decrypted_model_keys.get("openai", "")
+            anth_key = decrypted_model_keys.get("Claude API", "")
+            unsloth_key = decrypted_model_keys.get("Unsloth Studio", "")
+            openrouter_key = decrypted_model_keys.get("openrouter", "") or decrypted_model_keys.get("OpenRouter", "")
+            xai_key = decrypted_model_keys.get("xai", "") or decrypted_model_keys.get("xAI", "")
+            groq_key = decrypted_model_keys.get("groq", "") or decrypted_model_keys.get("Groq", "")
+            
+            server_choices = [s.get("name") for s in decrypted_mcp_servers]
+            success_msg = "✅ Сейф розблоковано!" if lang == "uk" else "✅ Vault unlocked!"
+            status_text = "🔓 Сейф розблоковано" if lang == "uk" else "🔓 Vault unlocked"
+            return (
+                success_msg,
+                gr.update(value=open_key),
+                gr.update(value=anth_key),
+                gr.update(value=unsloth_key),
+                gr.update(value=openrouter_key),
+                gr.update(value=xai_key),
+                gr.update(value=groq_key),
+                gr.update(choices=server_choices, value="OpenProject MCP" if "OpenProject MCP" in server_choices else (server_choices[0] if server_choices else None)),
+                gr.update(value=status_text)
+            )
+        else:
+            err_msg = "❌ Невірний пароль" if lang == "uk" else "❌ Invalid password"
+            return (err_msg, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+
+def save_keys_handler(
+    openai_key, anthropic_key, unsloth_key, openrouter_key, xai_key, groq_key, lang="uk"
+):
+    global decrypted_master_password, decrypted_model_keys
+    if not decrypted_master_password:
+        return "❌ Сейф заблоковано" if lang == "uk" else "❌ Vault is locked."
+        
+    decrypted_model_keys["ChatGPT"] = openai_key
+    decrypted_model_keys["openai"] = openai_key
+    decrypted_model_keys["Claude API"] = anthropic_key
+    decrypted_model_keys["Unsloth Studio"] = unsloth_key
+    decrypted_model_keys["openrouter"] = openrouter_key
+    decrypted_model_keys["xai"] = xai_key
+    decrypted_model_keys["groq"] = groq_key
+    
+    mcp_store.save_model_keys(decrypted_master_password, decrypted_model_keys)
+    return "✅ API Ключі збережено у сейфі" if lang == "uk" else "✅ API keys securely saved in vault!"
+
+
+def export_scenarios_handler(lang="en"):
+    out = os.path.join("exports", "mcp_attack_scenarios.jsonl")
+    n = export_scenarios_jsonl(out, lang="uk" if str(lang).startswith("uk") else "en")
+    return f"✅ Exported {n} scenario(s) → `{out}` (see docs/jsonl_schema.md)"
+
+def save_mcp_server_handler(name, mcp_type_val, url, token, auth_method, oauth_id, oauth_secret, oauth_token_url, oauth_scope, ssl_verify, ssl_ca, lang="uk"):
+    global decrypted_master_password, decrypted_mcp_servers
+    if not decrypted_master_password:
+        return "❌ Сейф заблоковано" if lang == "uk" else "❌ Vault is locked.", gr.update()
+        
+    if not name or not name.strip():
+        return "❌ Вкажіть назву сервера" if lang == "uk" else "❌ Enter server name.", gr.update()
+        
+    server_data = {
+        "name": name.strip(),
+        "mcp_type": mcp_type_val,
+        "mcp_url": url,
+        "mcp_token": token,
+        "mcp_auth_method": auth_method,
+        "oauth_client_id": oauth_id,
+        "oauth_client_secret": oauth_secret,
+        "oauth_token_url": oauth_token_url,
+        "oauth_scope": oauth_scope,
+        "mcp_ssl_verify": ssl_verify,
+        "mcp_ssl_ca_bundle": ssl_ca
+    }
+    
+    exists = False
+    for idx, s in enumerate(decrypted_mcp_servers):
+        if s.get("name") == server_data["name"]:
+            decrypted_mcp_servers[idx] = server_data
+            exists = True
+            break
+    if not exists:
+        decrypted_mcp_servers.append(server_data)
+        
+    mcp_store.save_mcp_servers(decrypted_master_password, decrypted_mcp_servers)
+    choices = [s.get("name") for s in decrypted_mcp_servers]
+    success_msg = f"✅ Сервер '{name}' збережено" if lang == "uk" else f"✅ Server '{name}' saved!"
+    return success_msg, gr.update(choices=choices, value=name)
+
+def load_mcp_server_handler(selected_name):
+    global decrypted_mcp_servers
+    if not selected_name:
+        return _mcp_noop_updates()
+        
+    for s in decrypted_mcp_servers:
+        if s.get("name") == selected_name:
+            return _mcp_load_value_updates(s)
+            
+    return _mcp_noop_updates()
+
+def delete_mcp_server_handler(selected_name, lang="uk"):
+    global decrypted_master_password, decrypted_mcp_servers
+    if not decrypted_master_password:
+        return "❌ Сейф заблоковано" if lang == "uk" else "❌ Vault is locked.", gr.update()
+    if not selected_name:
+        return "❌ Оберіть сервер" if lang == "uk" else "❌ Select a server.", gr.update()
+        
+    decrypted_mcp_servers = [s for s in decrypted_mcp_servers if s.get("name") != selected_name]
+    mcp_store.save_mcp_servers(decrypted_master_password, decrypted_mcp_servers)
+    choices = [s.get("name") for s in decrypted_mcp_servers]
+    success_msg = f"🗑️ Видалено '{selected_name}'" if lang == "uk" else f"🗑️ Deleted '{selected_name}'"
+    return success_msg, gr.update(choices=choices, value=choices[0] if choices else None)
+
+def generate_thesis_report_handler(selected_log, lang="uk"):
+    if not selected_log or selected_log in ["", "Немає логів", "Немає логів за цим фільтром"]:
+        return "❌ Оберіть лог для генерації звіту" if lang == "uk" else "❌ Select a log file first."
+    
+    log_path = os.path.join(LOGS_DIR, selected_log)
+    return report_generator.generate_thesis_report(log_path)
+
+
+# Dynamic language localization callback
+def change_language_handler(lang):
+    t = UI_TRANSLATIONS.get(lang or "uk", UI_TRANSLATIONS["uk"])
+    return (
+        t["title"],
+        t["setup_btn"],
+        gr.update(label=t["status_label"]),
+        gr.update(label=t["ollama_status"]),
+        gr.update(label=t["ram_status"]),
+        gr.update(label=t["model_drop"]),
+        t["refresh_btn"],
+        t["start_ollama"],
+        t["preload_btn"],
+        gr.update(label=t["mcp_type"]),
+        gr.update(label=t["mcp_url"]),
+        gr.update(label=t["mcp_token"]),
+        gr.update(label=t["mcp_auth_method"]),
+        gr.update(label=t["oauth_client_id"]),
+        gr.update(label=t["oauth_client_secret"]),
+        gr.update(label=t["oauth_token_url"]),
+        gr.update(label=t["oauth_scope"]),
+        gr.update(label=t["ssl_verify"]),
+        gr.update(label=t["ssl_ca"]),
+        gr.update(label=t["mcp_history_drop"]),
+        gr.update(label=t["mcp_save_name"]),
+        t["mcp_save_btn"],
+        t["mcp_delete_btn"],
+        t["mcp_template_btn"],
+        gr.update(label=t["profile_dropdown"]),
+        gr.update(label=t["profile_name"]),
+        gr.update(label=t["profile_pwd"]),
+        gr.update(label=t["profile_pwd_confirm"]),
+        t["profile_save"],
+        t["profile_load"],
+        t["profile_delete"],
+        gr.update(label=t["vector_label"]),
+        gr.update(label=t["custom_prompt"]),
+        t["run_btn"],
+        gr.update(label=t["run_status"]),
+        gr.update(label=t["log_filter"]),
+        gr.update(label=t["log_dropdown"]),
+        t["log_delete_btn"],
+        gr.update(label=t["log_viewer"]),
+        t["analyze_btn"],
+        gr.update(label=t["payload_drop"]),
+        gr.update(label=t["payload_editor"]),
+        t["payload_save"],
+        gr.update(label=t["upload_label"]),
+        t["vault_unlock_btn"],
+        gr.update(label=t["vault_pwd"]),
+        gr.update(label=t["keys_accordion"]),
+        t["save_keys_btn"],
+        gr.update(label=t["attack_accordion"]),
+        gr.update(label=t["defend_accordion"]),
+        gr.update(label=t["analyze_accordion"]),
+        t["thesis_report_btn"]
+    )
+
+
+def load_openproject_template(lang="uk"):
+    status_msg = "⚡ Шаблон OpenProject завантажено" if lang == "uk" else "⚡ OpenProject template loaded"
+    return (
+        gr.update(value="OpenProject MCP"),
+        gr.update(value="Remote URL"),
+        gr.update(value="https://openproject.test/mcp", visible=True),
+        gr.update(value="", visible=False),
+        gr.update(value="oauth_client_credentials", visible=True),
+        gr.update(value="test_client_id", visible=True),
+        gr.update(value="test_client_secret", visible=True),
+        gr.update(value="https://openproject.test/oauth/token", visible=True),
+        gr.update(value="mcp", visible=True),
+        gr.update(value=True, visible=True),
+        gr.update(value="", visible=True),
+        status_msg
+    )
+
+
 with gr.Blocks(title="MCP Security Lab") as app:
     with gr.Row():
         with gr.Column(scale=3):
-            gr.Markdown("# MCP Security Research Lab by Ihor Khomenko")
+            title_md = gr.Markdown("# MCP Security Research Lab by Ihor Khomenko")
         with gr.Column(scale=1):
             gr.Markdown("### Language / Мова")
             lang_toggle = gr.Radio(
@@ -434,10 +947,35 @@ with gr.Blocks(title="MCP Security Lab") as app:
     with gr.Row():
         with gr.Column(scale=1):
             gr.Markdown("### 1. Setup / Налаштування")
-            setup_btn = gr.Button("🚀 Build Research Environment", variant="secondary")
+            setup_btn = gr.Button("🚀 Створити середовище дослідження", variant="secondary")
             status_label = gr.Textbox(label="Статус VENV", value="⚠️ Не ініціалізовано", interactive=False, lines=1)
             
-            gr.Markdown("### 2. Configuration / Конфігурація")
+            # System diagnostics check
+            local_tools_box = gr.Markdown(get_local_tools_markdown("uk"))
+
+            gr.Markdown("### 2. Secure Vault / Захищений сейф")
+            vault_status_box = gr.Textbox(label="Vault Initialization Status", value=get_vault_status_text("uk"), interactive=False, lines=1)
+            master_pwd_box = gr.Textbox(label="Enter Master Password / Головний пароль", type="password")
+            unlock_vault_btn = gr.Button("🔓 Initialize or Unlock Vault", variant="primary")
+            vault_msg_box = gr.Markdown("")
+
+            keys_accordion = gr.Accordion("🔑 API Credentials / API Ключі", open=False)
+            with keys_accordion:
+                openai_api_key_box = gr.Textbox(label="OpenAI / ChatGPT API Key", type="password")
+                anthropic_api_key_box = gr.Textbox(label="Claude / Anthropic API Key", type="password")
+                unsloth_api_key_box = gr.Textbox(label="Unsloth Studio Key / Token", type="password")
+                openrouter_api_key_box = gr.Textbox(label="OpenRouter API Key", type="password")
+                xai_api_key_box = gr.Textbox(label="xAI API Key", type="password")
+                groq_api_key_box = gr.Textbox(label="Groq API Key", type="password")
+                save_api_keys_btn = gr.Button("💾 Securely Save API Keys")
+                api_keys_status_box = gr.Markdown("")
+                gr.Markdown(
+                    "Keys are also read from `.env` / environment "
+                    "(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, …). "
+                    "See `.env.example`."
+                )
+
+            gr.Markdown("### 3. Configuration / Конфігурація")
             ollama_status_box = gr.Textbox(label="Статус сервера Ollama", value=get_ollama_status_text(), interactive=False, lines=1)
             ram_status_box = gr.Textbox(label="Моделі в пам'яті (RAM/VRAM)", value=get_loaded_models_text(), interactive=False, lines=1)
             
@@ -451,43 +989,50 @@ with gr.Blocks(title="MCP Security Lab") as app:
             
             preload_status = gr.Markdown("")
             
-            mcp_type = gr.Radio(["Local Filesystem", "Remote URL"], label="MCP Connection Type", value="Local Filesystem")
-            mcp_url = gr.Textbox(label="MCP URL", visible=False)
-            mcp_token = gr.Textbox(label="Auth Token", type="password", visible=False)
-            mcp_auth_method = gr.Radio(
-                choices=[("API Token", "api_token"), ("OAuth Client Credentials", "oauth_client_credentials")],
-                value="api_token",
-                label="Remote Auth Method",
-                visible=False,
-            )
-            oauth_client_id = gr.Textbox(label="OAuth Client ID", visible=False)
-            oauth_client_secret = gr.Textbox(
-                label="OAuth Client Secret",
-                type="password",
-                visible=False,
-                info="Секрет OAuth-додатку / OAuth application secret (не URL).",
-            )
-            oauth_token_url = gr.Textbox(
-                label="OAuth Token URL",
-                placeholder="https://example.com/oauth/token",
-                visible=False,
-                info="Кінцева точка OAuth (зазвичай …/oauth/token). Не вставляйте сюди Client Secret. / OAuth token endpoint (often …/oauth/token). Do not paste the client secret here.",
-            )
-            oauth_scope = gr.Textbox(label="OAuth Scope", value="mcp", visible=False)
-            mcp_ssl_verify = gr.Checkbox(
-                label="Verify TLS (SSL) / Перевіряти SSL",
-                value=True,
-                visible=False,
-                info="Вимкніть для self-signed / локальних *.test. / Turn off for dev certificates.",
-            )
-            mcp_ssl_ca_bundle = gr.Textbox(
-                label="TLS CA bundle (.pem) / Файл CA (.pem)",
-                visible=False,
-                placeholder="/path/to/your-ca-or-fullchain.pem",
-                info="Якщо перевірка SSL увімкнена, вкажіть шлях до PEM з вашим CA (напр. mkcert / корпоративний CA). "
-                "Інакше лишіть порожнім (лише системні CA) або вимкніть Verify TLS. / "
-                "When Verify TLS is on, path to a PEM trust bundle for your dev CA. Leave empty for system CAs only.",
-            )
+            with gr.Accordion("📡 MCP Server Config / Налаштування MCP", open=True):
+                mcp_history_drop = gr.Dropdown(choices=[], label="Збережені сервери / Saved MCP Servers History", interactive=True)
+                mcp_type = gr.Radio(["Local Filesystem", "Remote URL"], label="MCP Connection Type", value="Local Filesystem")
+                mcp_url = gr.Textbox(label="MCP URL", visible=False)
+                mcp_token = gr.Textbox(label="Auth Token", type="password", visible=False)
+                mcp_auth_method = gr.Radio(
+                    choices=[("API Token", "api_token"), ("OAuth Client Credentials", "oauth_client_credentials")],
+                    value="api_token",
+                    label="Remote Auth Method",
+                    visible=False,
+                )
+                oauth_client_id = gr.Textbox(label="OAuth Client ID", visible=False)
+                oauth_client_secret = gr.Textbox(
+                    label="OAuth Client Secret",
+                    type="password",
+                    visible=False,
+                    info="Секрет OAuth-додатку / OAuth application secret (не URL).",
+                )
+                oauth_token_url = gr.Textbox(
+                    label="OAuth Token URL",
+                    placeholder="https://example.com/oauth/token",
+                    visible=False,
+                    info="Кінцева точка OAuth (зазвичай …/oauth/token). Не вставляйте сюди Client Secret.",
+                )
+                oauth_scope = gr.Textbox(label="OAuth Scope", value="mcp", visible=False)
+                mcp_ssl_verify = gr.Checkbox(
+                    label="Verify TLS (SSL) / Перевіряти SSL",
+                    value=True,
+                    visible=False,
+                    info="Вимкніть для self-signed / локальних *.test.",
+                )
+                mcp_ssl_ca_bundle = gr.Textbox(
+                    label="TLS CA bundle (.pem) / Файл CA (.pem)",
+                    visible=False,
+                    placeholder="/path/to/your-ca-or-fullchain.pem",
+                    info="Коли перевірка увімкнена, вкажіть шлях до PEM файлу з вашим CA.",
+                )
+                
+                mcp_save_name_box = gr.Textbox(label="Назва конфігурації для збереження / Configuration Name", placeholder="e.g. filesystem-local")
+                with gr.Row():
+                    mcp_save_server_btn = gr.Button("💾 Зберегти сервер")
+                    mcp_delete_server_btn = gr.Button("🗑️ Видалити сервер", variant="stop")
+                    mcp_load_template_btn = gr.Button("⚡ Шаблон OpenProject", variant="secondary")
+                    mcp_server_status_msg = gr.Markdown("")
 
             def on_mcp_type_change(conn_type, auth_method):
                 return _mcp_visibility_updates(conn_type, auth_method)
@@ -538,33 +1083,29 @@ with gr.Blocks(title="MCP Security Lab") as app:
                 outputs=[oauth_token_url],
             )
 
-            gr.Markdown("### Saved MCP profiles / Збережені профілі MCP")
-            gr.Markdown(
-                "Локально в `mcp_saved_profiles/` (PBKDF2 + Fernet). Пароль не зберігається. "
-                "Не захищає від компрометації ПК. / Stored under `mcp_saved_profiles/` (encrypted). "
-                "Password is never stored. Does not protect against a compromised machine."
-            )
-            profile_dropdown = gr.Dropdown(
-                choices=mcp_store.list_profiles(),
-                label="Saved profile (load/delete) / Збережений профіль",
-                value=None,
-                interactive=True,
-                allow_custom_value=False,
-            )
-            profile_name_in = gr.Textbox(
-                label="Profile name (save) / Ім’я профілю (зберегти)",
-                placeholder="e.g. my-remote-mcp",
-            )
-            profile_password = gr.Textbox(label="Password / Пароль", type="password")
-            profile_password_confirm = gr.Textbox(
-                label="Confirm password (save only) / Підтвердження паролю",
-                type="password",
-            )
-            profile_save_status = gr.Markdown("")
-            with gr.Row():
-                profile_save_btn = gr.Button("💾 Save profile / Зберегти")
-                profile_load_btn = gr.Button("📂 Load profile / Завантажити")
-                profile_delete_btn = gr.Button("🗑️ Delete profile / Видалити", variant="stop")
+            # Legacy Saved MCP profiles (retained for backward compatibility)
+            with gr.Accordion("📂 Legacy Profile Files", open=False):
+                profile_dropdown = gr.Dropdown(
+                    choices=mcp_store.list_profiles(),
+                    label="Saved profile file / Збережений профіль",
+                    value=None,
+                    interactive=True,
+                    allow_custom_value=False,
+                )
+                profile_name_in = gr.Textbox(
+                    label="Profile name / Ім’я профілю",
+                    placeholder="e.g. my-remote-mcp",
+                )
+                profile_password = gr.Textbox(label="Password / Пароль", type="password")
+                profile_password_confirm = gr.Textbox(
+                    label="Confirm password (save only)",
+                    type="password",
+                )
+                profile_save_status = gr.Markdown("")
+                with gr.Row():
+                    profile_save_btn = gr.Button("💾 Save profile file")
+                    profile_load_btn = gr.Button("📂 Load profile file")
+                    profile_delete_btn = gr.Button("🗑️ Delete profile file", variant="stop")
 
         with gr.Column(scale=2):
             with gr.Tabs():
@@ -577,6 +1118,54 @@ with gr.Blocks(title="MCP Security Lab") as app:
                         ("🧠 4. Просунутий захист (LLM-as-a-Judge)", "advanced_defense_sim.py")
                     ]
                     script_choice = gr.Radio(choices=SCRIPT_CHOICES, label="Вектор дослідження", value="attack_sim.py")
+
+                    # Decoupled Model Roles UI Configuration
+                    gr.Markdown("### 🤖 LLM Roles Settings / Налаштування Ролей ШІ")
+                    
+                    attack_accordion = gr.Accordion("🔴 Налаштування Агента-нападника (Attacker)", open=True)
+                    with attack_accordion:
+                        attack_prov_box = gr.Dropdown(
+                            choices=ATTACK_PROVIDER_CHOICES,
+                            label="Attacker LLM Engine / Provider",
+                            value="ollama",
+                            info="OpenAI-compatible: ollama, openai, openrouter (:free), xai, groq",
+                        )
+                        attack_model_box = gr.Textbox(
+                            label="Model Name / Command (Executable)",
+                            value="qwen2.5:7b",
+                            info="e.g. qwen2.5:7b | gpt-4o-mini | meta-llama/llama-3.2-3b-instruct:free | claude",
+                        )
+                        attack_base_box = gr.Textbox(
+                            label="Custom Base URL (optional)",
+                            placeholder="http://localhost:11434/v1 or https://openrouter.ai/api/v1",
+                        )
+
+                    defend_accordion = gr.Accordion("🛡️ Налаштування ШІ-судді (Defender)", open=False)
+                    with defend_accordion:
+                        defend_prov_box = gr.Dropdown(
+                            choices=DEFEND_PROVIDER_CHOICES,
+                            label="Defender LLM Engine / Provider",
+                            value="ollama",
+                        )
+                        defend_model_box = gr.Textbox(label="Defender Model Name", value="qwen2.5:7b")
+                        defend_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:11434/v1")
+
+                    with gr.Accordion("⏱️ Rate limits (quota-friendly)", open=False):
+                        llm_max_requests_box = gr.Number(
+                            label="Max LLM requests this run (LLM_MAX_REQUESTS)",
+                            value=None,
+                            precision=0,
+                            info="Stop after N calls — useful for OpenRouter free (~50/day)",
+                        )
+                        llm_request_delay_box = gr.Number(
+                            label="Delay between requests, seconds (LLM_REQUEST_DELAY)",
+                            value=0.0,
+                        )
+                        llm_max_retries_box = gr.Number(
+                            label="Max 429 retries with backoff (LLM_MAX_RETRIES)",
+                            value=5,
+                            precision=0,
+                        )
 
                     custom_prompt = gr.Textbox(
                         label="Завдання для ШІ-агента (Custom Prompt)", 
@@ -608,8 +1197,33 @@ with gr.Blocks(title="MCP Security Lab") as app:
                     log_viewer = gr.Textbox(label="Вміст збереженого логу", lines=15, interactive=False)
                     
                     gr.Markdown("### 🤖 Оцінка результатів (LLM-as-a-Judge)")
-                    analyze_btn = gr.Button("🔍 Проаналізувати поточний лог за допомогою обраної моделі ШІ", variant="primary")
+                    
+                    analyze_accordion = gr.Accordion("🤖 Налаштування ШІ-аудитора (Analyzer)", open=False)
+                    with analyze_accordion:
+                        analyze_prov_box = gr.Dropdown(
+                            choices=DEFEND_PROVIDER_CHOICES,
+                            label="Analyzer LLM Engine / Provider",
+                            value="ollama",
+                        )
+                        analyze_model_box = gr.Textbox(label="Analyzer Model Name", value="qwen2.5:7b")
+                        analyze_base_box = gr.Textbox(label="Custom Base URL (optional)", placeholder="http://localhost:11434/v1")
+                    
+                    with gr.Row():
+                        analyze_btn = gr.Button("🔍 Проаналізувати поточний лог за допомогою обраної моделі ШІ", variant="primary")
+                        thesis_report_btn = gr.Button("📄 Згенерувати академічний звіт для дисертації", variant="secondary")
+
                     analysis_result = gr.Markdown("*Тут буде висновок ШІ...*")
+                    
+                    gr.Markdown("---")
+                    gr.Markdown("### 📄 Академічний звіт для дисертації / Thesis Report")
+                    thesis_report_viewer = gr.Markdown("*Тут буде академічний звіт після генерації...*")
+
+                    gr.Markdown("### 📤 JSONL export for MCP-Sentinel evaluation")
+                    export_scenarios_btn = gr.Button("📤 Export attack scenarios (JSONL)", variant="secondary")
+                    export_scenarios_status = gr.Markdown(
+                        "*Exports labelled attack traces for the external Sentinel guard "
+                        "(built in LLM-tester-tool). See docs/jsonl_schema.md.*"
+                    )
 
                 with gr.Tab("📂 Payload-менеджер (Ін'єкції)"):
                     gr.Markdown("Керування файлами у `test_vault`. Тут можна редагувати файли для Prompt Injection або завантажити власні тести.")
@@ -628,11 +1242,105 @@ with gr.Blocks(title="MCP Security Lab") as app:
                     gr.Markdown("### 📤 Завантажити новий Payload")
                     upload_file = gr.File(label="Завантажити .txt або .json файл", type="filepath", file_count="single")
 
+    # Wire handlers
     setup_btn.click(fn=setup_env_progress, outputs=status_label)
-    refresh_models_btn.click(fn=refresh_ui, inputs=[log_filter], outputs=[ollama_status_box, model_drop, ram_status_box, log_dropdown])
+    refresh_models_btn.click(fn=refresh_ui, inputs=[log_filter, lang_toggle], outputs=[ollama_status_box, model_drop, ram_status_box, log_dropdown, local_tools_box])
     start_ollama_btn.click(fn=start_ollama, outputs=[ollama_status_box, model_drop, ram_status_box])
     preload_btn.click(fn=preload_model, inputs=[model_drop], outputs=[preload_status, ram_status_box])
 
+    # Language toggle wiring
+    lang_toggle.change(
+        fn=change_language_handler,
+        inputs=[lang_toggle],
+        outputs=[
+            title_md, setup_btn, status_label, ollama_status_box, ram_status_box, model_drop,
+            refresh_models_btn, start_ollama_btn, preload_btn, mcp_type, mcp_url, mcp_token,
+            mcp_auth_method, oauth_client_id, oauth_client_secret, oauth_token_url, oauth_scope,
+            mcp_ssl_verify, mcp_ssl_ca_bundle, mcp_history_drop, mcp_save_name_box,
+            mcp_save_server_btn, mcp_delete_server_btn, mcp_load_template_btn, profile_dropdown, profile_name_in,
+            profile_password, profile_password_confirm, profile_save_btn, profile_load_btn,
+            profile_delete_btn, script_choice, custom_prompt, run_btn, execution_status,
+            log_filter, log_dropdown, delete_log_btn, log_viewer, analyze_btn,
+            vault_files_drop, vault_editor, save_vault_btn, upload_file,
+            unlock_vault_btn, master_pwd_box, keys_accordion, save_api_keys_btn,
+            attack_accordion, defend_accordion, analyze_accordion, thesis_report_btn
+        ]
+    )
+
+    # Vault wiring
+    unlock_vault_btn.click(
+        fn=unlock_vault_handler,
+        inputs=[master_pwd_box, lang_toggle],
+        outputs=[
+            vault_msg_box,
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            mcp_history_drop,
+            vault_status_box,
+        ],
+    )
+    save_api_keys_btn.click(
+        fn=save_keys_handler,
+        inputs=[
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            lang_toggle,
+        ],
+        outputs=[api_keys_status_box],
+    )
+    
+    # MCP Servers History wiring
+    mcp_save_server_btn.click(
+        fn=save_mcp_server_handler,
+        inputs=[
+            mcp_save_name_box, mcp_type, mcp_url, mcp_token, mcp_auth_method,
+            oauth_client_id, oauth_client_secret, oauth_token_url, oauth_scope,
+            mcp_ssl_verify, mcp_ssl_ca_bundle, lang_toggle
+        ],
+        outputs=[mcp_server_status_msg, mcp_history_drop]
+    )
+    mcp_history_drop.change(
+        fn=load_mcp_server_handler,
+        inputs=[mcp_history_drop],
+        outputs=[
+            mcp_type, mcp_url, mcp_token, mcp_auth_method,
+            oauth_client_id, oauth_client_secret, oauth_token_url, oauth_scope,
+            mcp_ssl_verify, mcp_ssl_ca_bundle
+        ]
+    )
+    mcp_delete_server_btn.click(
+        fn=delete_mcp_server_handler,
+        inputs=[mcp_history_drop, lang_toggle],
+        outputs=[mcp_server_status_msg, mcp_history_drop]
+    )
+    mcp_load_template_btn.click(
+        fn=load_openproject_template,
+        inputs=[lang_toggle],
+        outputs=[
+            mcp_save_name_box,
+            mcp_type,
+            mcp_url,
+            mcp_token,
+            mcp_auth_method,
+            oauth_client_id,
+            oauth_client_secret,
+            oauth_token_url,
+            oauth_scope,
+            mcp_ssl_verify,
+            mcp_ssl_ca_bundle,
+            mcp_server_status_msg,
+        ]
+    )
+
+    # Legacy profile wiring
     profile_save_btn.click(
         fn=save_mcp_profile_handler,
         inputs=[
@@ -681,7 +1389,11 @@ with gr.Blocks(title="MCP Security Lab") as app:
         fn=run_research, 
         inputs=[
             script_choice,
-            model_drop,
+            attack_prov_box, attack_model_box, attack_base_box,
+            defend_prov_box, defend_model_box, defend_base_box,
+            openai_api_key_box, anthropic_api_key_box, unsloth_api_key_box,
+            openrouter_api_key_box, xai_api_key_box, groq_api_key_box,
+            llm_max_requests_box, llm_request_delay_box, llm_max_retries_box,
             mcp_type,
             mcp_url,
             mcp_token,
@@ -707,10 +1419,35 @@ with gr.Blocks(title="MCP Security Lab") as app:
     refresh_logs_btn.click(fn=update_log_choices, inputs=[log_filter], outputs=[log_dropdown])
     log_dropdown.change(fn=load_log_content, inputs=[log_dropdown], outputs=[log_viewer])
     delete_log_btn.click(fn=delete_log_file, inputs=[log_dropdown, log_filter], outputs=[log_dropdown, log_viewer])
+    
     analyze_btn.click(
         fn=analyze_log_with_llm,
-        inputs=[log_viewer, model_drop, lang_toggle],
+        inputs=[
+            log_viewer,
+            analyze_prov_box,
+            analyze_model_box,
+            openai_api_key_box,
+            anthropic_api_key_box,
+            unsloth_api_key_box,
+            openrouter_api_key_box,
+            xai_api_key_box,
+            groq_api_key_box,
+            analyze_base_box,
+            lang_toggle,
+        ],
         outputs=[analysis_result],
+    )
+
+    thesis_report_btn.click(
+        fn=generate_thesis_report_handler,
+        inputs=[log_dropdown, lang_toggle],
+        outputs=[thesis_report_viewer]
+    )
+
+    export_scenarios_btn.click(
+        fn=export_scenarios_handler,
+        inputs=[lang_toggle],
+        outputs=[export_scenarios_status],
     )
 
     refresh_vault_btn.click(fn=lambda: gr.update(choices=get_vault_files()), outputs=[vault_files_drop])
