@@ -1,6 +1,9 @@
-"""JSONL export of attack scenarios / traces for MCP-Sentinel evaluation.
+"""JSONL export of attack / benign scenarios / traces for MCP-Sentinel evaluation.
 
 Schema version 1.0 — see ``docs/jsonl_schema.md``.
+
+Compatible with ``llmtest import-mcp-sim`` in LLM-tester-tool
+(``attack_class: benign`` / ``label: benign`` → false-positive controls).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ def _utc_now() -> str:
 
 @dataclass
 class ScenarioRecord:
-    """One JSONL line: a labelled MCP attack/defense scenario with trace."""
+    """One JSONL line: a labelled MCP attack/defense/benign scenario with trace."""
 
     schema_version: str
     id: str
@@ -47,6 +50,9 @@ class ScenarioRecord:
     source: str = DEFAULT_SOURCE
     language: str = "en"
     timestamp: str = field(default_factory=_utc_now)
+    # Explicit eval label for import-mcp-sim (benign controls set ``benign``).
+    label: Optional[str] = None
+    mirrors: Optional[str] = None
     # Live-run optional fields (filled when exporting from a simulation session)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -56,7 +62,16 @@ class ScenarioRecord:
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         # Drop empty optionals for cleaner JSONL.
-        for key in ("tools_before", "tools_after", "provider", "model", "guard_hook", "outcome"):
+        for key in (
+            "tools_before",
+            "tools_after",
+            "provider",
+            "model",
+            "guard_hook",
+            "outcome",
+            "label",
+            "mirrors",
+        ):
             if data.get(key) in (None, {}, []):
                 data.pop(key, None)
         return data
@@ -117,6 +132,13 @@ def scenario_to_record(
     user_prompt = _pick_lang(scenario.get("user_prompt"), lang)
     attack_class = scenario["attack_class"]
     tools = list(scenario.get("tools") or scenario.get("tools_after") or scenario.get("tools_before") or [])
+    # Mark benign controls clearly for llmtest import-mcp-sim.
+    if scenario.get("label"):
+        label = str(scenario["label"])
+    elif attack_class == "benign":
+        label = "benign"
+    else:
+        label = None
 
     return ScenarioRecord(
         schema_version=SCHEMA_VERSION,
@@ -142,6 +164,8 @@ def scenario_to_record(
         ),
         attack_class_definition=dict(ATTACK_CLASSES.get(attack_class, {})),
         language=lang,
+        label=label,
+        mirrors=scenario.get("mirrors"),
     )
 
 
@@ -211,7 +235,10 @@ def append_live_trace(
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m scenarios.export",
-        description="Export MCP attack scenarios as JSONL for MCP-Sentinel evaluation.",
+        description=(
+            "Export MCP attack and benign scenarios as JSONL for MCP-Sentinel "
+            "evaluation (llmtest import-mcp-sim)."
+        ),
     )
     p.add_argument(
         "--out",
