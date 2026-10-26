@@ -19,6 +19,7 @@ This repo focuses on **attack scenarios + traces + local defense demos**. It doe
 | **Path traversal** | coerced reads of secrets | Access outside a session allow-list. |
 | **Guard prefix bypass** | `defense_bypass_sim.py` | Naive `path.startswith(ALLOWED_DIR)` allows malicious *writes* inside the vault (content blind spot). |
 | **Judge evasion** | catalog `mcp-judge-evasion-benign-framing-001` | Destructive logic framed as a “backup unit test” to probe LLM-judge false negatives. |
+| **Benign controls (FP)** | catalog `mcp-benign-*-001` | Same tools / normal intents / no injection — measure Sentinel false positives. |
 
 ### Defenses (local demos — not Sentinel)
 
@@ -51,7 +52,9 @@ python -m scenarios.export --out exports/mcp_attack_scenarios.jsonl --lang en
 python -m scenarios.export --list
 ```
 
-Schema: [`docs/jsonl_schema.md`](docs/jsonl_schema.md). Labelled traces (tool calls, untrusted tool results, guard decisions) are usable as evaluation data in LLM-tester-tool’s Sentinel package.
+Schema: [`docs/jsonl_schema.md`](docs/jsonl_schema.md). Labelled traces (tool calls, untrusted tool results, guard decisions) are usable as evaluation data in LLM-tester-tool’s Sentinel package via `llmtest import-mcp-sim`.
+
+**Benign controls** (`attack_class` / `label`: `benign`, `labels.guard_should_block: false`) mirror attack scenarios with the **same tools** and normal user intents — no injection. Import them with attacks to measure Sentinel **false positives**. Catalog ids: `mcp-benign-report-summary-001`, `mcp-benign-summary-write-001`, `mcp-benign-weather-001`, `mcp-benign-whitelist-read-001`, `mcp-benign-safe-write-001` (each has a `mirrors` field pointing at the paired attack). Clean vault text: `test_vault/report_ok.txt`.
 
 ### Run
 
@@ -91,6 +94,7 @@ Remote MCP settings can be stored password-encrypted under `mcp_saved_profiles/`
 | **Path traversal** | читання секретів | Доступ поза whitelist сесії. |
 | **Обхід prefix-гарду** | `defense_bypass_sim.py` | `startswith(ALLOWED_DIR)` пропускає шкідливий *запис* усередині vault. |
 | **Обхід LLM-судді** | сценарій judge-evasion | Деструктивний код під виглядом «backup unit test». |
+| **Безпечні контролі (FP)** | каталог `mcp-benign-*-001` | Ті самі інструменти / нормальні наміри / без ін'єкції — хибнопозитивні Sentinel. |
 
 ### Захисти (локальні демо — не Sentinel)
 
@@ -112,7 +116,9 @@ Remote MCP settings can be stored password-encrypted under `mcp_saved_profiles/`
 python -m scenarios.export --out exports/mcp_attack_scenarios.jsonl --lang uk
 ```
 
-Формат: [`docs/jsonl_schema.md`](docs/jsonl_schema.md) — оцінка зовнішнього MCP-Sentinel.
+Формат: [`docs/jsonl_schema.md`](docs/jsonl_schema.md) — оцінка зовнішнього MCP-Sentinel (`llmtest import-mcp-sim`).
+
+**Безпечні контролі** (`attack_class` / `label`: `benign`) — ті самі інструменти, що й у атаках, легітимні наміри, без ін'єкції; для вимірювання **хибнопозитивних** рішень Sentinel.
 
 ### Запуск
 
