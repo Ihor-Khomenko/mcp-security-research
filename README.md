@@ -56,6 +56,25 @@ Schema: [`docs/jsonl_schema.md`](docs/jsonl_schema.md). Labelled traces (tool ca
 
 **Benign controls** (`attack_class` / `label`: `benign`, `labels.guard_should_block: false`) mirror attack scenarios with the **same tools** and normal user intents — no injection. Import them with attacks to measure Sentinel **false positives**. Catalog ids: `mcp-benign-report-summary-001`, `mcp-benign-summary-write-001`, `mcp-benign-weather-001`, `mcp-benign-whitelist-read-001`, `mcp-benign-safe-write-001` (each has a `mirrors` field pointing at the paired attack). Clean vault text: `test_vault/report_ok.txt`.
 
+### v6-hard corpus (tier-separating attacks)
+
+Versioned family `corpus: v6-hard` (`scenarios/v6_hard.py`, ids `mcp-v6h-*`) for thesis ablations where the easy catalog collapses to S1 lexical hits. Payloads use polite / TODO / table / JSON / comment / split-output / mixed-language cues; `homoglyph_zw` is a separate subfamily. Covers read→write exfil, argument smuggling, tool aliasing, subtle rug-pull, and summary-write poisoning, each with matched benign hard-negatives. Compatible with the **injected** live success metric (sinks named in injected content, not in the user request).
+
+```bash
+python -m scenarios.export --corpus v6-hard --lang en --out exports/v6_hard_en.jsonl
+python -m scenarios.export --corpus v6-hard --lang uk --out exports/v6_hard_uk.jsonl
+python -m scenarios.export --corpus v6-hard --list
+
+# Offline Oberih replay (LLM-tester-tool mocks only — no API keys)
+llmtest mcp-scenario-eval --out-dir /tmp/v6_replay --mode replay \
+  --input exports/v6_hard_en.jsonl --defense none --defense oberih --mock --json
+
+# Per-tier / per-subfamily table checked into docs/eval/
+python scripts/eval_v6_hard_offline.py   # needs llm_tester from LLM-tester-tool
+```
+
+Offline results: [`docs/eval/v6_hard_offline_results.md`](docs/eval/v6_hard_offline_results.md). This repo does **not** change Oberih thresholds or S1–S4 code.
+
 ### Run
 
 ```bash
@@ -119,6 +138,10 @@ python -m scenarios.export --out exports/mcp_attack_scenarios.jsonl --lang uk
 Формат: [`docs/jsonl_schema.md`](docs/jsonl_schema.md) — оцінка зовнішнього MCP-Sentinel (`llmtest import-mcp-sim`).
 
 **Безпечні контролі** (`attack_class` / `label`: `benign`) — ті самі інструменти, що й у атаках, легітимні наміри, без ін'єкції; для вимірювання **хибнопозитивних** рішень Sentinel.
+
+### Корпус v6-hard
+
+Версіонована родина `corpus: v6-hard` (`scenarios/v6_hard.py`) — складніші атаки без S1 override/role-claim/numbered-tool лексикону, з парними benign hard-negative. Експорт: `python -m scenarios.export --corpus v6-hard --lang uk`. Офлайн-таблиця абляції: [`docs/eval/v6_hard_offline_results.md`](docs/eval/v6_hard_offline_results.md).
 
 ### Запуск
 
