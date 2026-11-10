@@ -50,9 +50,21 @@ Each line is one JSON object (`ScenarioRecord`).
 | `payloads` | object | Inline file contents keyed by filename |
 | `attack_class_definition` | object | EN/UK definition of the primary class |
 | `language` | string | `en` or `uk` |
+| `corpus` | string | Versioned family tag (e.g. `v6-hard`) |
+| `corpus_version` | string | Family version (`v6`) |
+| `subfamily` | string | Within-corpus slice (e.g. `data_todo`, `subtle_rug_pull`) |
 | `provider` / `model` | string | Filled for live runs |
 | `guard_hook` | string | Hook id used during the run (`none`, or `module:attr`) |
 | `outcome` | string | Live outcome summary |
+
+### Corpus filter
+
+```bash
+python -m scenarios.export --corpus v6-hard --lang en --out exports/v6_hard_en.jsonl
+python -m scenarios.export --corpus v6-hard --list
+```
+
+Catalog-only bilingual payloads may ship as `inline_payloads` (resolved at export by `--lang`) so LLM-tester-tool language alignment is not required for new files. See `scenarios/v6_hard.py` and `docs/eval/v6_hard_offline_results.md`.
 
 ## Attack / control classes
 

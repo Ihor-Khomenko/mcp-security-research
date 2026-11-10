@@ -1,11 +1,18 @@
 """Attack scenario catalog and JSONL export for MCP-Sentinel evaluation."""
 
-from scenarios.catalog import ATTACK_CLASSES, SCENARIOS, get_scenario, list_scenarios
+from scenarios.catalog import (
+    ATTACK_CLASSES,
+    SCENARIOS,
+    get_scenario,
+    list_corpora,
+    list_scenarios,
+)
 
 __all__ = [
     "ATTACK_CLASSES",
     "SCENARIOS",
     "get_scenario",
+    "list_corpora",
     "list_scenarios",
     "SCHEMA_VERSION",
     "ScenarioRecord",

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, TextIO
 
-from scenarios.catalog import ATTACK_CLASSES, SCENARIOS, get_scenario
+from scenarios.catalog import ATTACK_CLASSES, SCENARIOS, get_scenario, list_scenarios
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_SOURCE = "mcp-security-research"
@@ -53,6 +53,9 @@ class ScenarioRecord:
     # Explicit eval label for import-mcp-sim (benign controls set ``benign``).
     label: Optional[str] = None
     mirrors: Optional[str] = None
+    corpus: Optional[str] = None
+    corpus_version: Optional[str] = None
+    subfamily: Optional[str] = None
     # Live-run optional fields (filled when exporting from a simulation session)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -71,6 +74,9 @@ class ScenarioRecord:
             "outcome",
             "label",
             "mirrors",
+            "corpus",
+            "corpus_version",
+            "subfamily",
         ):
             if data.get(key) in (None, {}, []):
                 data.pop(key, None)
@@ -79,13 +85,42 @@ class ScenarioRecord:
 
 def _pick_lang(value: Any, lang: str) -> str:
     if isinstance(value, dict):
+        # Bilingual map {en, uk} — not a generic JSON object payload.
+        if any(k in value for k in ("en", "uk")) and all(
+            isinstance(v, str) for v in value.values()
+        ):
+            return str(value.get(lang) or value.get("en") or next(iter(value.values()), ""))
+        # Structured JSON-ish dict left as JSON text only if caller asks; keep str().
         return str(value.get(lang) or value.get("en") or next(iter(value.values()), ""))
     return str(value or "")
 
 
-def _load_payloads(names: Iterable[str], vault_dir: Path) -> Dict[str, str]:
+def _localize_value(value: Any, lang: str) -> Any:
+    """Recursively resolve ``{en, uk}`` leaves; leave other structures intact."""
+    if isinstance(value, dict):
+        if any(k in value for k in ("en", "uk")) and all(
+            isinstance(v, str) for v in value.values()
+        ):
+            return _pick_lang(value, lang)
+        return {k: _localize_value(v, lang) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_localize_value(v, lang) for v in value]
+    return value
+
+
+def _load_payloads(
+    names: Iterable[str],
+    vault_dir: Path,
+    *,
+    lang: str,
+    inline: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
     out: Dict[str, str] = {}
+    inline = inline or {}
     for name in names:
+        if name in inline:
+            out[name] = _pick_lang(inline[name], lang)
+            continue
         path = vault_dir / name
         if path.is_file():
             out[name] = path.read_text(encoding="utf-8")
@@ -100,6 +135,7 @@ def _resolve_trace(
     user_prompt: str,
     payloads: Dict[str, str],
     scenario: Dict[str, Any],
+    lang: str,
 ) -> List[Dict[str, Any]]:
     resolved: List[Dict[str, Any]] = []
     for step in template:
@@ -112,6 +148,10 @@ def _resolve_trace(
             fname = ref.split(":", 1)[1]
             event["content"] = payloads.get(fname, "")
             event["payload_file"] = fname
+        elif "content" in event:
+            event["content"] = _localize_value(event.get("content"), lang)
+        if "arguments" in event:
+            event["arguments"] = _localize_value(event.get("arguments"), lang)
         if tools_ref:
             event["tools"] = scenario.get(tools_ref) or []
         resolved.append(event)
@@ -128,7 +168,12 @@ def scenario_to_record(
     vault = vault_dir or Path(__file__).resolve().parent.parent / "test_vault"
     lang = "uk" if lang.lower().startswith("uk") else "en"
     payload_names = list(scenario.get("payload_files") or [])
-    payloads = _load_payloads(payload_names, vault) if include_payloads else {}
+    inline = scenario.get("inline_payloads") or {}
+    payloads = (
+        _load_payloads(payload_names, vault, lang=lang, inline=inline)
+        if include_payloads
+        else {}
+    )
     user_prompt = _pick_lang(scenario.get("user_prompt"), lang)
     attack_class = scenario["attack_class"]
     tools = list(scenario.get("tools") or scenario.get("tools_after") or scenario.get("tools_before") or [])
@@ -139,6 +184,10 @@ def scenario_to_record(
         label = "benign"
     else:
         label = None
+    labels = dict(scenario.get("labels") or {})
+    corpus = scenario.get("corpus") or labels.get("corpus")
+    corpus_version = scenario.get("corpus_version") or labels.get("corpus_version")
+    subfamily = scenario.get("subfamily") or labels.get("subfamily")
 
     return ScenarioRecord(
         schema_version=SCHEMA_VERSION,
@@ -149,7 +198,7 @@ def scenario_to_record(
         description=_pick_lang(scenario.get("description"), lang),
         simulation=scenario.get("simulation", ""),
         defense=scenario.get("defense", "none"),
-        labels=dict(scenario.get("labels") or {}),
+        labels=labels,
         tools=tools,
         tools_before=scenario.get("tools_before"),
         tools_after=scenario.get("tools_after"),
@@ -161,11 +210,15 @@ def scenario_to_record(
             user_prompt=user_prompt,
             payloads=payloads,
             scenario=scenario,
+            lang=lang,
         ),
         attack_class_definition=dict(ATTACK_CLASSES.get(attack_class, {})),
         language=lang,
         label=label,
         mirrors=scenario.get("mirrors"),
+        corpus=str(corpus) if corpus else None,
+        corpus_version=str(corpus_version) if corpus_version else None,
+        subfamily=str(subfamily) if subfamily else None,
     )
 
 
@@ -186,6 +239,7 @@ def export_scenarios_jsonl(
     *,
     lang: str = "en",
     scenario_ids: Optional[List[str]] = None,
+    corpus: Optional[str] = None,
     vault_dir: Optional[Path] = None,
     append: bool = False,
 ) -> int:
@@ -198,7 +252,7 @@ def export_scenarios_jsonl(
                 raise KeyError(f"Unknown scenario id: {sid}")
             selected.append(s)
     else:
-        selected = list(SCENARIOS)
+        selected = list_scenarios(corpus=corpus)
 
     records = [
         scenario_to_record(s, lang=lang, vault_dir=vault_dir) for s in selected
@@ -254,6 +308,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Scenario id to export (repeatable). Default: all.",
     )
+    p.add_argument(
+        "--corpus",
+        default=None,
+        help="Export only scenarios tagged with this corpus (e.g. v6-hard).",
+    )
     p.add_argument("--append", action="store_true")
     p.add_argument("--list", action="store_true", help="List scenario ids and exit")
     return p
@@ -262,13 +321,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.list:
-        for s in SCENARIOS:
-            print(f"{s['id']}\t{s['attack_class']}\t{s.get('simulation')}")
+        rows = list_scenarios(corpus=args.corpus) if args.corpus else list(SCENARIOS)
+        for s in rows:
+            corpus = s.get("corpus") or (s.get("labels") or {}).get("corpus") or "-"
+            sub = s.get("subfamily") or (s.get("labels") or {}).get("subfamily") or "-"
+            print(
+                f"{s['id']}\t{s['attack_class']}\t{corpus}\t{sub}\t{s.get('simulation')}"
+            )
         return 0
     n = export_scenarios_jsonl(
         args.out,
         lang=args.lang,
         scenario_ids=args.ids,
+        corpus=args.corpus,
         append=args.append,
     )
     print(f"Wrote {n} scenario(s) → {args.out}")

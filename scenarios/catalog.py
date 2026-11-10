@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from scenarios.v6_hard import V6_HARD_SCENARIOS
+
 ATTACK_CLASSES = {
     "indirect_prompt_injection": {
         "en": "Indirect prompt injection via tool/file content trusted as data.",
@@ -963,9 +965,20 @@ SCENARIOS: List[Dict[str, Any]] = [
     },
 ]
 
+# Append versioned hard family (corpus ``v6-hard``) — see scenarios/v6_hard.py.
+SCENARIOS.extend(V6_HARD_SCENARIOS)
 
-def list_scenarios() -> List[Dict[str, Any]]:
-    return list(SCENARIOS)
+
+def list_scenarios(*, corpus: Optional[str] = None) -> List[Dict[str, Any]]:
+    if not corpus:
+        return list(SCENARIOS)
+    want = str(corpus).strip().lower()
+    out: List[Dict[str, Any]] = []
+    for s in SCENARIOS:
+        c = str(s.get("corpus") or (s.get("labels") or {}).get("corpus") or "").lower()
+        if c == want:
+            out.append(s)
+    return out
 
 
 def get_scenario(scenario_id: str) -> Optional[Dict[str, Any]]:
@@ -973,3 +986,14 @@ def get_scenario(scenario_id: str) -> Optional[Dict[str, Any]]:
         if s["id"] == scenario_id:
             return s
     return None
+
+
+def list_corpora() -> List[str]:
+    found = []
+    seen = set()
+    for s in SCENARIOS:
+        c = str(s.get("corpus") or (s.get("labels") or {}).get("corpus") or "").strip()
+        if c and c not in seen:
+            seen.add(c)
+            found.append(c)
+    return found
